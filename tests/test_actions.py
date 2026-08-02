@@ -6,6 +6,7 @@ import typing
 import pytest
 
 from cop_agent.domain.actions import (
+    DEFAULT_MAX_BARRIERS,
     Action,
     IllegalActionError,
     MoveAction,
@@ -16,7 +17,7 @@ from cop_agent.domain.actions import (
 )
 from cop_agent.domain.axes import AxisConvention
 from cop_agent.domain.board import BoardState
-from cop_agent.domain.rules import IllegalMoveError
+from cop_agent.domain.rules import IllegalMoveError, legal_moves
 
 AXES = AxisConvention()
 
@@ -156,3 +157,71 @@ class TestPlacementRange:
     def test_trapping_placement_on_the_thief_is_in_range_when_adjacent(self) -> None:
         """The trapping capture requires the cop to be next to the thief."""
         assert (3, 3) in placement_range(make(cop=(3, 2), thief=(3, 3)), AXES)
+
+
+class TestBarrierIsIrreversible:
+    def test_barriers_only_ever_grow(self) -> None:
+        state = make(cop=(3, 3))
+        for cell in ((3, 3), (2, 3), (3, 4)):
+            after = place_barrier(state, cell, AXES)
+            assert after.barriers >= state.barriers
+            state = after
+        assert state.barriers == frozenset({(3, 3), (2, 3), (3, 4)})
+
+    def test_no_api_removes_a_barrier(self) -> None:
+        """There is deliberately no inverse of place_barrier."""
+        import cop_agent.domain.actions as actions
+
+        assert not [n for n in dir(actions) if "remove" in n or "clear" in n]
+
+    def test_replacing_an_existing_barrier_is_refused(self) -> None:
+        state = make(cop=(3, 3), barriers=frozenset({(2, 3)}))
+        with pytest.raises(IllegalActionError, match="already placed"):
+            place_barrier(state, (2, 3), AXES)
+
+
+class TestBarrierBlocksBothPlayers:
+    def test_blocks_the_thief(self) -> None:
+        state = make(thief=(3, 3), barriers=frozenset({(2, 3)}))
+        assert "N" not in legal_moves(state, "thief", AXES)
+
+    def test_blocks_the_cop_that_placed_it(self) -> None:
+        """The cop can imprison itself behind a wall of its own making."""
+        state = make(cop=(3, 3), barriers=frozenset({(2, 3)}))
+        assert "N" not in legal_moves(state, "cop", AXES)
+
+    def test_a_fully_walled_cop_has_only_stay(self) -> None:
+        state = make(cop=(3, 3), barriers=frozenset({(2, 3), (4, 3), (3, 2), (3, 4)}))
+        assert legal_moves(state, "cop", AXES) == ["STAY"]
+
+
+class TestBarrierQuota:
+    def test_default_quota_matches_appendix_f(self) -> None:
+        assert DEFAULT_MAX_BARRIERS == 14
+
+    def _spend(self, quota: int) -> BoardState:
+        """Walk the cop along row 0 sealing behind it, to respect reach."""
+        state = make(cop=(0, 0), thief=(6, 6))
+        for i in range(quota):
+            state = place_barrier(state, (1, state.cop[1]), AXES, max_barriers=quota)
+            if i < quota - 1:
+                state = apply_action(state, "cop", MoveAction("E"), AXES, max_barriers=quota)
+        return state
+
+    def test_placing_up_to_the_quota_is_allowed(self) -> None:
+        assert self._spend(6).barriers_used == 6
+
+    def test_one_past_the_quota_is_refused(self) -> None:
+        state = self._spend(6)
+        with pytest.raises(IllegalActionError, match="quota exhausted"):
+            place_barrier(state, (0, 6), AXES, max_barriers=6)
+
+    def test_quota_is_raisable_by_agreement(self) -> None:
+        """A *minimum* parameter: negotiable upward, never below 14."""
+        state = self._spend(6)
+        assert place_barrier(state, (0, 6), AXES, max_barriers=20).barriers_used == 7
+
+    def test_quota_applies_through_apply_action(self) -> None:
+        state = self._spend(6)
+        with pytest.raises(IllegalActionError, match="quota exhausted"):
+            apply_action(state, "cop", PlaceBarrier((0, 6)), AXES, max_barriers=6)
