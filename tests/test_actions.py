@@ -12,6 +12,7 @@ from cop_agent.domain.actions import (
     PlaceBarrier,
     apply_action,
     place_barrier,
+    placement_range,
 )
 from cop_agent.domain.axes import AxisConvention
 from cop_agent.domain.board import BoardState
@@ -45,7 +46,7 @@ class TestExclusivityByConstruction:
 
     def test_placing_never_moves_the_thief_either(self) -> None:
         before = make()
-        after = apply_action(before, "cop", PlaceBarrier((1, 1)), AXES)
+        after = apply_action(before, "cop", PlaceBarrier((1, 0)), AXES)
         assert after.thief == before.thief
 
 
@@ -80,7 +81,7 @@ class TestOnlyTheCopPlaces:
 class TestPlaceBarrier:
     def test_returns_a_new_state(self) -> None:
         before = make()
-        after = place_barrier(before, (1, 1), AXES)
+        after = place_barrier(before, (1, 0), AXES)
         assert after is not before
         assert before.barriers == frozenset()
 
@@ -90,11 +91,11 @@ class TestPlaceBarrier:
 
     def test_adds_to_existing_barriers(self) -> None:
         state = make(barriers=frozenset({(1, 1)}))
-        assert place_barrier(state, (2, 2), AXES).barriers == frozenset({(1, 1), (2, 2)})
+        assert place_barrier(state, (0, 1), AXES).barriers == frozenset({(1, 1), (0, 1)})
 
     def test_preserves_step_and_positions(self) -> None:
         before = make(step=5)
-        after = place_barrier(before, (1, 1), AXES)
+        after = place_barrier(before, (1, 0), AXES)
         assert (after.step, after.cop, after.thief) == (5, before.cop, before.thief)
 
 
@@ -114,3 +115,44 @@ class TestExhaustiveness:
         foreign = typing.cast(Action, object())
         with pytest.raises(AssertionError):
             apply_action(make(), "cop", foreign, AXES)
+
+
+class TestPlacementRange:
+    def test_centre_cop_reaches_own_cell_and_four_neighbours(self) -> None:
+        cells = placement_range(make(cop=(3, 3)), AXES)
+        assert cells == frozenset({(3, 3), (2, 3), (4, 3), (3, 2), (3, 4)})
+
+    def test_corner_cop_loses_the_off_board_neighbours(self) -> None:
+        assert placement_range(make(cop=(0, 0)), AXES) == frozenset({(0, 0), (1, 0), (0, 1)})
+
+    def test_range_contains_no_diagonals(self) -> None:
+        cells = placement_range(make(cop=(3, 3)), AXES)
+        for diagonal in ((2, 2), (2, 4), (4, 2), (4, 4)):
+            assert diagonal not in cells
+
+    def test_may_seal_its_own_cell(self) -> None:
+        assert place_barrier(make(cop=(3, 3)), (3, 3), AXES).is_barrier((3, 3))
+
+    def test_may_seal_an_orthogonal_neighbour(self) -> None:
+        assert place_barrier(make(cop=(3, 3)), (2, 3), AXES).is_barrier((2, 3))
+
+    def test_refuses_a_distant_cell(self) -> None:
+        with pytest.raises(IllegalActionError, match="out of reach"):
+            place_barrier(make(cop=(0, 0)), (5, 5), AXES)
+
+    def test_refuses_a_diagonal_neighbour(self) -> None:
+        with pytest.raises(IllegalActionError, match="out of reach"):
+            place_barrier(make(cop=(3, 3)), (2, 2), AXES)
+
+    def test_refuses_two_cells_away(self) -> None:
+        with pytest.raises(IllegalActionError, match="out of reach"):
+            place_barrier(make(cop=(3, 3)), (1, 3), AXES)
+
+    def test_range_follows_the_negotiated_convention(self) -> None:
+        """Reach is geometric, so all four conventions give the same cells."""
+        flipped = AxisConvention(origin_corner="bottom-right")
+        assert placement_range(make(cop=(3, 3)), AXES) == placement_range(make(cop=(3, 3)), flipped)
+
+    def test_trapping_placement_on_the_thief_is_in_range_when_adjacent(self) -> None:
+        """The trapping capture requires the cop to be next to the thief."""
+        assert (3, 3) in placement_range(make(cop=(3, 2), thief=(3, 3)), AXES)
