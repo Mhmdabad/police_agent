@@ -1,0 +1,226 @@
+"""Tests for the cop's brain and its selection from config."""
+
+import tomllib
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from cop_agent.domain.actions import MoveAction, PlaceBarrier
+from cop_agent.domain.axes import AxisConvention
+from cop_agent.domain.board import MOVES, BoardState, Move
+from cop_agent.strategy.base import BrainBase, Decision, NoLegalActionError
+from cop_agent.strategy.loader import DEFAULT_BRAIN, StrategyError, load_brain
+from cop_agent.strategy.police_brain import PoliceBrain, manhattan
+
+AXES = AxisConvention()
+
+
+def make(**kw: object) -> BoardState:
+    base: dict[str, object] = {"grid_size": 7, "cop": (0, 0), "thief": (3, 3)}
+    base.update(kw)
+    return BoardState(**base)  # type: ignore[arg-type]
+
+
+class TestManhattan:
+    def test_matches_the_rulebook_worked_example(self) -> None:
+        """Cop (2,2), target (5,5): D = 3 + 3 = 6."""
+        assert manhattan((2, 2), (5, 5)) == 6
+
+    def test_is_symmetric(self) -> None:
+        assert manhattan((1, 2), (4, 6)) == manhattan((4, 6), (1, 2))
+
+    def test_a_cell_is_zero_from_itself(self) -> None:
+        assert manhattan((3, 3), (3, 3)) == 0
+
+    def test_ignores_barriers(self) -> None:
+        """Admissible: it never overestimates the true step count."""
+        assert manhattan((0, 0), (0, 2)) == 2
+
+
+class TestPursuit:
+    def test_closes_distance_from_the_corner(self) -> None:
+        brain = PoliceBrain(axes=AXES)
+        move = brain.decide(make()).action
+        assert isinstance(move, MoveAction)
+        assert move.move in {"S", "E"}
+
+    def test_the_rulebook_worked_example(self) -> None:
+        """Cop (2,2) chasing (5,5): east or south both reduce D to 5."""
+        brain = PoliceBrain(axes=AXES)
+        action = brain.decide(make(cop=(2, 2), thief=(5, 5))).action
+        assert isinstance(action, MoveAction)
+        assert action.move in {"S", "E"}
+
+    def test_never_increases_the_distance(self) -> None:
+        brain = PoliceBrain(axes=AXES)
+        for row in range(7):
+            for col in range(7):
+                state = make(cop=(row, col), thief=(6, 6))
+                before = manhattan(state.cop, state.thief)
+                action = brain.decide(state).action
+                assert isinstance(action, MoveAction)
+                from cop_agent.domain.rules import target_of
+
+                after = manhattan(target_of(state.cop, action.move, AXES), state.thief)
+                assert after <= before
+
+    def test_an_explicit_target_overrides_the_thief_position(self) -> None:
+        """Once a belief map exists it supplies the target instead."""
+        brain = PoliceBrain(axes=AXES)
+        action = brain.decide(make(cop=(3, 3), thief=(0, 0)), target=(6, 3)).action
+        assert isinstance(action, MoveAction)
+        assert action.move == "S"
+
+    def test_a_walled_in_cop_stays(self) -> None:
+        walls = frozenset({(2, 3), (4, 3), (3, 2), (3, 4)})
+        action = PoliceBrain(axes=AXES).decide(make(cop=(3, 3), barriers=walls)).action
+        assert action == MoveAction("STAY")
+
+    def test_honours_the_negotiated_convention(self) -> None:
+        flipped = AxisConvention(origin_corner="bottom-left")
+        brain = PoliceBrain(axes=flipped)
+        action = brain.decide(make(cop=(3, 3), thief=(0, 3))).action
+        assert isinstance(action, MoveAction)
+        assert action.move == "S"
+
+
+class TestLegalityGuard:
+    def test_the_policy_never_returns_an_illegal_move(self) -> None:
+        brain = PoliceBrain(axes=AXES)
+        walls = frozenset({(1, 1), (2, 2), (3, 3), (4, 4)})
+        for row in range(7):
+            for col in range(7):
+                state = make(cop=(row, col), thief=(6, 6), barriers=walls)
+                if state.is_barrier(state.cop):
+                    continue
+                action = brain.decide(state).action
+                assert isinstance(action, MoveAction)
+                assert action.move in brain.options(state)
+
+    def test_a_rogue_subclass_is_caught(self) -> None:
+        """Defence in depth: the guard runs on whatever a subclass produced."""
+
+        class Rogue(PoliceBrain):
+            def _pick_move(self, state: BoardState, **context: object) -> Move:
+                return "N"
+
+        with pytest.raises(NoLegalActionError, match="not among"):
+            Rogue(axes=AXES).decide(make(cop=(0, 0)))
+
+    def test_the_guard_cannot_be_bypassed_by_overriding_pick_move(self) -> None:
+        """`decide` is the entry point; subclasses override the hooks."""
+        assert "_guard" in BrainBase.decide.__code__.co_names
+
+    def test_a_sealed_cop_has_nothing_legal(self) -> None:
+        """Sealed in place with every neighbour blocked: no move exists."""
+        walls = frozenset({(3, 3), (2, 3), (4, 3), (3, 2), (3, 4)})
+        with pytest.raises(NoLegalActionError, match="no legal move"):
+            PoliceBrain(axes=AXES).decide(make(cop=(3, 3), barriers=walls))
+
+    def test_the_guard_reports_an_empty_option_set(self) -> None:
+        """A subclass that acts anyway is caught by the guard, not the policy."""
+
+        class Stubborn(PoliceBrain):
+            def _pick_move(self, state: BoardState, **context: object) -> Move:
+                return "N"
+
+        walls = frozenset({(3, 3), (2, 3), (4, 3), (3, 2), (3, 4)})
+        with pytest.raises(NoLegalActionError, match="has no legal move"):
+            Stubborn(axes=AXES).decide(make(cop=(3, 3), barriers=walls))
+
+    def test_a_barrier_action_passes_the_move_guard(self) -> None:
+        """Placement legality belongs to the domain layer, not here."""
+        brain = PoliceBrain(axes=AXES)
+        brain._guard(make(), PlaceBarrier((1, 0)))
+
+
+class TestDeterminism:
+    def test_same_state_and_seed_yields_the_same_action(self) -> None:
+        state = make(cop=(2, 2), thief=(5, 5))
+        first = PoliceBrain(axes=AXES, seed=7).decide(state).action
+        second = PoliceBrain(axes=AXES, seed=7).decide(state).action
+        assert first == second
+
+    def test_the_seed_is_recorded_on_the_brain(self) -> None:
+        """A match cannot be replayed if the seed is not known."""
+        assert PoliceBrain(axes=AXES, seed=99).seed == 99
+
+    def test_randomness_is_seeded_not_global(self) -> None:
+        a = PoliceBrain(axes=AXES, seed=1).rng.random()
+        b = PoliceBrain(axes=AXES, seed=1).rng.random()
+        assert a == b
+
+    def test_different_seeds_give_different_streams(self) -> None:
+        a = PoliceBrain(axes=AXES, seed=1).rng.random()
+        b = PoliceBrain(axes=AXES, seed=2).rng.random()
+        assert a != b
+
+
+class TestDecision:
+    def test_carries_an_action(self) -> None:
+        assert isinstance(PoliceBrain(axes=AXES).decide(make()), Decision)
+
+    def test_defaults_to_a_truthful_intent(self) -> None:
+        """Intent is declared before sending; deception is opt-in."""
+        assert PoliceBrain(axes=AXES).decide(make()).intent == "truth"
+
+
+class TestLoader:
+    def test_an_absent_section_loads_the_shipped_brain(self) -> None:
+        assert isinstance(load_brain(None), PoliceBrain)
+
+    def test_an_empty_section_loads_the_shipped_brain(self) -> None:
+        assert isinstance(load_brain({}), PoliceBrain)
+
+    def test_the_default_reference_resolves(self) -> None:
+        assert isinstance(load_brain({"police_class": DEFAULT_BRAIN}), PoliceBrain)
+
+    def test_a_custom_brain_is_loaded(self) -> None:
+        spec = "cop_agent.strategy.police_brain:PoliceBrain"
+        assert isinstance(load_brain({"police_class": spec}), BrainBase)
+
+    def test_a_malformed_reference_is_refused(self) -> None:
+        with pytest.raises(StrategyError, match="package.module:Class"):
+            load_brain({"police_class": "not_a_reference"})
+
+    def test_an_unimportable_module_is_refused(self) -> None:
+        with pytest.raises(StrategyError, match="cannot import"):
+            load_brain({"police_class": "no.such.module:Brain"})
+
+    def test_a_missing_class_is_refused(self) -> None:
+        with pytest.raises(StrategyError, match="has no"):
+            load_brain({"police_class": "cop_agent.strategy.police_brain:Missing"})
+
+    def test_a_non_brain_is_refused(self) -> None:
+        """Loading anything callable would defer the failure to move one."""
+        with pytest.raises(StrategyError, match="does not subclass"):
+            load_brain({"police_class": "cop_agent.strategy.police_brain:manhattan"})
+
+    def test_the_axis_convention_is_threaded_through(self) -> None:
+        flipped = AxisConvention(origin_corner="bottom-right")
+        assert load_brain({}, axes=flipped).axes == flipped
+
+    def test_the_seed_is_threaded_through(self) -> None:
+        assert load_brain({}, seed=42).seed == 42
+
+    def test_the_shipped_private_config_selects_the_default(self) -> None:
+        """The section is commented out, so the heuristic brain runs."""
+        path = Path(__file__).parents[1] / "config/police/game.toml"
+        private: dict[str, Any] = tomllib.loads(path.read_text())
+        assert isinstance(load_brain(private.get("strategy")), PoliceBrain)
+
+
+class TestContract:
+    def test_the_role_is_the_cop(self) -> None:
+        assert PoliceBrain(axes=AXES).role == "cop"
+
+    def test_options_are_in_stable_order(self) -> None:
+        """Replay determinism depends on both peers iterating identically."""
+        brain = PoliceBrain(axes=AXES)
+        state = make(cop=(3, 3))
+        assert brain.options(state) == list(MOVES)
+
+    def test_the_base_class_cannot_be_instantiated(self) -> None:
+        with pytest.raises(TypeError):
+            BrainBase()  # type: ignore[abstract]
