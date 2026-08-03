@@ -65,6 +65,7 @@ DIVERGENT: dict[str, str] = {
     "strategy/base.py": "notes which hooks this role overrides",
     "strategy/loader.py": "reads police_class vs thief_class",
     "strategy/barriers.py": "cop-only; the thief has no barriers to place",
+    "strategy/budget.py": "cop-only; the thief has no quota to spend",
     "strategy/police_brain.py": "the cop's policy; no counterpart there",
     "strategy/thief_brain.py": "the thief's policy; no counterpart here",
 }
