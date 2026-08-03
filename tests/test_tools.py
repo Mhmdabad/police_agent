@@ -106,6 +106,7 @@ class TestSurfaceIsSmall:
         """Every endpoint is another thing an opponent can probe."""
         public = {n for n in dir(ToolSurface) if not n.startswith("_")}
         assert public == {
+            "dispatch",
             "ping",
             "handshake",
             "negotiate_config",
