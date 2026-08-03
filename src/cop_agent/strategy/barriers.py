@@ -19,10 +19,19 @@ because the corner supplies two sides for free. A cell whose neighbours are
 already sealed or off-board is a cell where the next barrier finishes work
 already paid for.
 
-**Self-penalty.** The rules do not stop the cop walling *itself* off, and a
-greedy sequence of locally excellent barriers will do exactly that. Sealing
-here is scored against losing reach to the target. Issue #43 turns this into a
-hard veto; at this stage it is a term, so the ranking stays comparable.
+**Self-cost.** The rules do not stop the cop walling *itself* off, and a
+greedy sequence of locally excellent barriers will do exactly that.
+
+That last axis is a **hard constraint**, not a weight. Two placements are
+refused outright however well they score: one that cuts the cop off from the
+region it is hunting, and one that leaves the cop with no legal move at all.
+The second is the more expensive mistake. A cop that cannot move cannot answer
+its turn, and an unanswered turn is a technical loss — which scores **zero for
+both sides**, converting a game we were winning into a game nobody played.
+
+Refused candidates are still scored and still logged. Dropping them silently
+would leave a match transcript showing a barrier that went somewhere odd with
+no record of what was rejected or why.
 """
 
 import logging
@@ -31,7 +40,7 @@ from dataclasses import dataclass, replace
 from ..domain.actions import placement_range
 from ..domain.axes import AxisConvention
 from ..domain.board import MOVES, BoardState, Position
-from ..domain.rules import target_of
+from ..domain.rules import legal_moves, target_of
 from ..domain.search import is_connected, reachable_area
 
 logger = logging.getLogger(__name__)
@@ -57,17 +66,42 @@ class BarrierScore:
     escape_reduction: int
     chain: int
     disconnects: bool
+    immobilises: bool = False
+
+    @property
+    def permitted(self) -> bool:
+        """Whether the self-preservation constraint allows this placement.
+
+        A hard gate, checked before the score is consulted at all. No escape
+        reduction is worth being unable to reach the thief, and none is worth
+        being unable to answer a turn.
+        """
+        return not (self.disconnects or self.immobilises)
 
     @property
     def total(self) -> int:
-        """Higher is better. Chain progress breaks ties on equal reduction."""
-        penalty = SELF_PENALTY if self.disconnects else 0
+        """Higher is better. Chain progress breaks ties on equal reduction.
+
+        Refused candidates keep a number rather than becoming incomparable, so
+        the log can show how good the placement we turned down would have been.
+        """
+        penalty = 0 if self.permitted else SELF_PENALTY
         return self.escape_reduction + self.chain - penalty
 
+    @property
+    def veto(self) -> str:
+        """Why this placement is refused, or the empty string if it is not."""
+        if self.immobilises:
+            return "NO-LEGAL-MOVE-AFTER"
+        if self.disconnects:
+            return "CUTS-SELF-OFF"
+        return ""
+
     def __str__(self) -> str:
-        cut = " CUTS-SELF-OFF" if self.disconnects else ""
+        refused = f" {self.veto}" if self.veto else ""
         return (
-            f"{self.at} total={self.total} (escape-{self.escape_reduction} chain+{self.chain}){cut}"
+            f"{self.at} total={self.total} "
+            f"(escape-{self.escape_reduction} chain+{self.chain}){refused}"
         )
 
 
@@ -119,6 +153,7 @@ def score_placement(
         escape_reduction=before - after,
         chain=chain_progress(state, at, axes),
         disconnects=not still_reaches(sealed, target, axes),
+        immobilises=not legal_moves(sealed, "cop", axes),
     )
 
 
@@ -146,9 +181,28 @@ def rank_placements(
     return scored
 
 
+def safe_placements(
+    state: BoardState, axes: AxisConvention, target: Position
+) -> list[BarrierScore]:
+    """Ranked placements with the refused ones removed.
+
+    The filter is separate from the ranking so that both survive: callers get
+    only permitted placements, and the log still records what was rejected.
+    """
+    permitted = [score for score in rank_placements(state, axes, target) if score.permitted]
+    if not permitted:
+        logger.info("no permitted placement from cop=%s: every candidate is refused", state.cop)
+    return permitted
+
+
 def best_placement(
     state: BoardState, axes: AxisConvention, target: Position
 ) -> BarrierScore | None:
-    """The highest-scoring placement, or ``None`` if nothing is available."""
-    ranked = rank_placements(state, axes, target)
-    return ranked[0] if ranked else None
+    """The best placement the constraint allows, or ``None`` if there is none.
+
+    ``None`` means *do not place a barrier this turn*, never "place the least
+    bad one". Not placing costs a barrier we keep; placing a refused one can
+    cost the match.
+    """
+    permitted = safe_placements(state, axes, target)
+    return permitted[0] if permitted else None
