@@ -105,7 +105,13 @@ class TestSurfaceIsSmall:
     def test_only_the_agreed_tools_are_exposed(self) -> None:
         """Every endpoint is another thing an opponent can probe."""
         public = {n for n in dir(ToolSurface) if not n.startswith("_")}
-        assert public == {"ping", "handshake", "negotiate_config", "get_state_digest"}
+        assert public == {
+            "ping",
+            "handshake",
+            "negotiate_config",
+            "get_state_digest",
+            "declare_barrier",
+        }
 
     def test_no_tool_mutates_state_directly(self) -> None:
         tools = surface()
@@ -114,3 +120,23 @@ class TestSurfaceIsSmall:
         tools.handshake("them", "thief", PROTOCOL_VERSION)
         tools.negotiate_config(CONFIG_DIGEST)
         assert tools.get_state_digest().data["state_digest"] == before
+
+
+class TestDeclareBarrier:
+    def test_carries_the_exact_cell_and_step(self) -> None:
+        """The opponent must be able to rebuild the board from declarations."""
+        data = surface().declare_barrier(2, 3, 7).data
+        assert data["row"] == 2
+        assert data["col"] == 3
+        assert data["step"] == 7
+
+    def test_is_attributed_to_the_cop(self) -> None:
+        assert surface().declare_barrier(2, 3, 7).data["declared_by"] == "cop"
+
+    def test_is_accepted(self) -> None:
+        assert surface().declare_barrier(0, 0, 1).ok
+
+    def test_distinct_placements_are_distinguishable(self) -> None:
+        first = surface().declare_barrier(2, 3, 7).data
+        second = surface().declare_barrier(3, 3, 8).data
+        assert first != second

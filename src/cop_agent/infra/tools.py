@@ -107,6 +107,21 @@ class ToolSurface:
             )
         return ToolResult.accept(config_sha256=self._config_digest)
 
+    def declare_barrier(self, row: int, col: int, step: int) -> ToolResult:
+        """Announce a barrier placement, truthfully and with its exact cell.
+
+        The rulebook is unusually blunt here: every placement must be
+        announced, no barrier may be placed in secret, and the cop may not lie
+        about the location. Both are disqualification offences, and the audit
+        re-checks each declaration against the sealed commitment.
+
+        So this method exists to be called on **every** placement. It carries
+        the position and the step rather than a bare acknowledgement, because
+        the opponent must be able to reconstruct the board from declarations
+        alone in order to validate ours against theirs.
+        """
+        return ToolResult.accept(row=row, col=col, step=step, declared_by=self._identity.role)
+
     def get_state_digest(self) -> ToolResult:
         """Our view of the board, for cross-checking.
 
