@@ -122,6 +122,21 @@ class ToolSurface:
         """
         return ToolResult.accept(row=row, col=col, step=step, declared_by=self._identity.role)
 
+    def capture_claim(self, row: int, col: int, step: int, basis: str) -> ToolResult:
+        """Assert a capture, naming the cell, the step and the grounds.
+
+        The claim places the thief under a cryptographic obligation to answer
+        truthfully — and it binds this agent exactly as hard. A claim must be
+        derivable from verified board state; a false one is exposed at the log
+        audit and disqualifies the team **with no appeal**.
+
+        ``basis`` names which of the three routes is being claimed: overlap,
+        trapping placement, or enclosure. A bare "I captured you" is not
+        checkable without replaying the whole match, whereas a named basis can
+        be verified against the opponent's own copy of the board immediately.
+        """
+        return ToolResult.accept(row=row, col=col, step=step, basis=basis)
+
     def get_state_digest(self) -> ToolResult:
         """Our view of the board, for cross-checking.
 
