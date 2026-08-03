@@ -111,6 +111,7 @@ class TestSurfaceIsSmall:
             "negotiate_config",
             "get_state_digest",
             "declare_barrier",
+            "capture_claim",
         }
 
     def test_no_tool_mutates_state_directly(self) -> None:
@@ -140,3 +141,23 @@ class TestDeclareBarrier:
         first = surface().declare_barrier(2, 3, 7).data
         second = surface().declare_barrier(3, 3, 8).data
         assert first != second
+
+
+class TestCaptureClaim:
+    def test_names_the_cell_step_and_basis(self) -> None:
+        """A bare claim is not checkable without replaying the whole match."""
+        data = surface().capture_claim(3, 3, 12, "overlap").data
+        assert (data["row"], data["col"], data["step"]) == (3, 3, 12)
+        assert data["basis"] == "overlap"
+
+    def test_is_accepted(self) -> None:
+        assert surface().capture_claim(3, 3, 12, "overlap").ok
+
+    def test_each_capture_route_can_be_named(self) -> None:
+        for basis in ("overlap", "trapping", "enclosure"):
+            assert surface().capture_claim(3, 3, 12, basis).data["basis"] == basis
+
+    def test_claims_at_different_steps_are_distinguishable(self) -> None:
+        assert surface().capture_claim(3, 3, 12, "overlap").data != (
+            surface().capture_claim(3, 3, 13, "overlap").data
+        )
