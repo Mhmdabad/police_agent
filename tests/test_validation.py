@@ -2,7 +2,7 @@
 
 import pytest
 
-from cop_agent.infra.tools import PROTOCOL_VERSION, PeerIdentity, ToolSurface
+from cop_agent.infra.inboxes import PeerInboxes
 from cop_agent.infra.validation import (
     InvalidPayloadError,
     reject_unknown_fields,
@@ -11,13 +11,6 @@ from cop_agent.infra.validation import (
     require_mapping,
     require_str,
 )
-
-OURS = PeerIdentity(group_id="s82kma9e", role="cop")
-DIGEST = "a" * 64
-
-
-def surface() -> ToolSurface:
-    return ToolSurface(OURS, DIGEST, lambda: "deadbeef")
 
 
 class TestRequireMapping:
@@ -101,72 +94,42 @@ class TestRejectUnknownFields:
         reject_unknown_fields({"a": 1}, frozenset({"a"}))
 
 
-class TestDispatchNeverRaises:
+class TestTheLiveInboundSurface:
+    """The mailboxes are what an opponent reaches, so hostile input ends here.
+
+    These moved off the retired ToolSurface. Keeping them matters: a crash
+    mid-turn is a technical loss scoring zero for both sides, so a peer that
+    can be crashed by a malformed payload hands its opponent a way to void any
+    match it is losing.
+    """
+
     @pytest.mark.parametrize(
         "payload",
-        [None, [], "x", 1, {"role": 1}, {"role": True}, {1: "x"}, {"unexpected": "y"}],
+        [None, [], "x", 1, {"sender": 1}, {"sender": True}, {1: "x"}, {"sender": "referee"}],
     )
     def test_hostile_payloads_become_refusals(self, payload: object) -> None:
-        """A crash mid-turn is a technical loss scoring zero for both sides."""
-        result = surface().dispatch("handshake", payload)
-        assert not result.ok
-        assert result.detail
+        assert PeerInboxes().receive_turn(payload)["ok"] is False
 
-    def test_unknown_tool_is_refused_not_raised(self) -> None:
-        result = surface().dispatch("drop_tables", {})
-        assert not result.ok
-        assert "unknown tool" in result.detail
+    def test_a_boolean_coordinate_is_refused(self) -> None:
+        """{"barrier_placed": [true, 3]} would otherwise index row 1."""
+        boxes = PeerInboxes()
+        turn = {
+            "step": 1,
+            "sender": "thief",
+            "smell_grid": {},
+            "commit": "c",
+            "timestamp": "t",
+            "barrier_placed": [True, 3],
+        }
+        assert boxes.receive_turn(turn)["ok"] is False
 
-    def test_a_valid_handshake_still_works(self) -> None:
-        result = surface().dispatch(
-            "handshake",
-            {"group_id": "them", "role": "thief", "protocol_version": PROTOCOL_VERSION},
-        )
-        assert result.ok
-
-    def test_a_valid_negotiate_still_works(self) -> None:
-        assert surface().dispatch("negotiate_config", {"config_sha256": DIGEST}).ok
-
-    def test_ping_and_state_digest_take_no_fields(self) -> None:
-        assert surface().dispatch("ping", {}).ok
-        assert surface().dispatch("get_state_digest", {}).ok
-        assert not surface().dispatch("ping", {"extra": 1}).ok
-
-    def test_a_bogus_role_is_refused(self) -> None:
-        result = surface().dispatch(
-            "handshake",
-            {"group_id": "them", "role": "referee", "protocol_version": PROTOCOL_VERSION},
-        )
-        assert not result.ok
-        assert "must be one of" in result.detail
-
-
-class TestCopSpecificTools:
-    def test_declare_barrier_rejects_a_boolean_coordinate(self) -> None:
-        """{"row": true} would otherwise be accepted as row 1."""
-        result = surface().dispatch("declare_barrier", {"row": True, "col": 3, "step": 7})
-        assert not result.ok
-        assert "must be an integer" in result.detail
-
-    def test_declare_barrier_rejects_a_negative_cell(self) -> None:
-        result = surface().dispatch("declare_barrier", {"row": -1, "col": 3, "step": 7})
-        assert not result.ok
-
-    def test_declare_barrier_accepts_a_valid_placement(self) -> None:
-        assert surface().dispatch("declare_barrier", {"row": 2, "col": 3, "step": 7}).ok
-
-    def test_capture_claim_rejects_an_unknown_basis(self) -> None:
-        """Only the three routes the rulebook defines are claimable."""
-        result = surface().dispatch(
-            "capture_claim", {"row": 3, "col": 3, "step": 9, "basis": "vibes"}
-        )
-        assert not result.ok
-        assert "must be one of" in result.detail
-
-    def test_capture_claim_accepts_each_real_basis(self) -> None:
-        for basis in ("overlap", "trapping", "enclosure"):
-            payload = {"row": 3, "col": 3, "step": 9, "basis": basis}
-            assert surface().dispatch("capture_claim", payload).ok
-
-    def test_capture_claim_rejects_a_missing_basis(self) -> None:
-        assert not surface().dispatch("capture_claim", {"row": 3, "col": 3, "step": 9}).ok
+    def test_a_valid_turn_is_accepted(self) -> None:
+        boxes = PeerInboxes()
+        turn = {
+            "step": 1,
+            "sender": "thief",
+            "smell_grid": {},
+            "commit": "c",
+            "timestamp": "t",
+        }
+        assert boxes.receive_turn(turn)["ok"] is True
