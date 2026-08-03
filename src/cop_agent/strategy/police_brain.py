@@ -1,19 +1,24 @@
 """The cop's decision-making.
 
-A first, deliberately transparent policy: pursue the target by Manhattan
-distance, and never relocate somewhere illegal. The refinements the rulebook's
-strategy chapter calls for — containment scoring, the self-preservation veto,
-the barrier budget curve — arrive as separate changes on top of this.
+Pursue the target by Manhattan distance, breaking ties by **containment
+value** rather than by position.
 
-Starting plain is the point. The rulebook treats pure heuristics as a
-first-class route, competitive with reinforcement learning, and a policy that
-can be read in one sitting is one whose mistakes can be found.
+Distance alone decides where to step but not which of several equally close
+steps is worth taking, and those are not equivalent. The rulebook's real
+objective for this agent is not *chase the thief* but *shrink the space the
+thief has*: enclosure costs two barriers in a corner, three on an edge and
+four in open board, so herding matters more than closing.
+
+The tie-break scores a candidate by how much it reduces the thief's reachable
+area, falling back to proximity to the board edge when reachability cannot
+separate them. Both are cheap and both point the pursuit the same way.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from ..domain.board import Agent, BoardState, Move, Position
+from ..domain.board import MOVES, Agent, BoardState, Move, Position
 from ..domain.rules import target_of
+from ..domain.search import reachable_area
 from .base import BrainBase, NoLegalActionError
 
 
@@ -61,6 +66,31 @@ class PoliceBrain(BrainBase):
         if not available:
             raise NoLegalActionError("cop has no legal move")
         goal = self.target(state, **context)
-        return min(
-            available, key=lambda move: manhattan(target_of(state.cop, move, self.axes), goal)
-        )
+        return min(available, key=lambda move: self._rank(state, move, goal))
+
+    def _rank(self, state: BoardState, move: Move, goal: Position) -> tuple[int, int, int, int]:
+        """Order candidates: distance first, then containment value.
+
+        Returned as a tuple so ``min`` applies the criteria in priority order
+        and the final element keeps the ordering total — two candidates that
+        tie on everything else resolve by :data:`~..domain.board.MOVES` index,
+        which is stable across peers and therefore replay-safe.
+        """
+        destination = target_of(state.cop, move, self.axes)
+        distance = manhattan(destination, goal)
+        after = replace(state, cop=destination)
+        escape = reachable_area(after, goal, self.axes)
+        edge = self._edge_pressure(state, goal)
+        return (distance, escape, edge, MOVES.index(move))
+
+    def _edge_pressure(self, state: BoardState, goal: Position) -> int:
+        """How far the target sits from the nearest board edge.
+
+        Lower is better for us: a target near an edge is one enclosure can
+        close with two or three barriers instead of four. Used only when
+        reachability cannot separate two candidates, which on an open board is
+        most of the time.
+        """
+        row, col = goal
+        last = state.grid_size - 1
+        return min(row, col, last - row, last - col)

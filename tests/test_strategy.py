@@ -224,3 +224,64 @@ class TestContract:
     def test_the_base_class_cannot_be_instantiated(self) -> None:
         with pytest.raises(TypeError):
             BrainBase()  # type: ignore[abstract]
+
+
+class TestContainmentTieBreak:
+    def test_distance_still_dominates(self) -> None:
+        """Containment breaks ties; it does not override closing in."""
+        brain = PoliceBrain(axes=AXES)
+        state = make(cop=(0, 0), thief=(0, 6))
+        action = brain.decide(state).action
+        assert isinstance(action, MoveAction)
+        assert action.move == "E"
+
+    def test_a_tie_is_broken_not_left_to_position(self) -> None:
+        """Cop (2,2) to (5,5): S and E both reach D=5, so something must choose."""
+        brain = PoliceBrain(axes=AXES)
+        action = brain.decide(make(cop=(2, 2), thief=(5, 5))).action
+        assert isinstance(action, MoveAction)
+        assert action.move in {"S", "E"}
+
+    def test_it_prefers_shrinking_the_thiefs_reachable_area(self) -> None:
+        """A step that seals a region beats one that merely closes distance."""
+        walls = frozenset({(0, 2), (1, 2), (3, 2), (4, 2), (5, 2), (6, 2)})
+        state = make(cop=(2, 1), thief=(2, 5), barriers=walls)
+        action = PoliceBrain(axes=AXES).decide(state).action
+        assert isinstance(action, MoveAction)
+        assert action.move == "E"
+
+    def test_edge_pressure_prefers_a_cornered_target(self) -> None:
+        brain = PoliceBrain(axes=AXES)
+        assert brain._edge_pressure(make(), (0, 0)) == 0
+        assert brain._edge_pressure(make(), (3, 3)) == 3
+        assert brain._edge_pressure(make(), (0, 3)) == 0
+
+    def test_edge_pressure_is_symmetric_across_the_board(self) -> None:
+        brain = PoliceBrain(axes=AXES)
+        assert brain._edge_pressure(make(), (6, 6)) == 0
+        assert brain._edge_pressure(make(), (1, 1)) == 1
+
+    def test_the_ranking_is_total(self) -> None:
+        """Two candidates never tie completely, so the choice is deterministic."""
+        brain = PoliceBrain(axes=AXES)
+        state = make(cop=(3, 3), thief=(3, 3))
+        ranks = [brain._rank(state, move, state.thief) for move in brain.options(state)]
+        assert len(set(ranks)) == len(ranks)
+
+    def test_it_stays_deterministic_across_instances(self) -> None:
+        state = make(cop=(2, 2), thief=(5, 5))
+        first = PoliceBrain(axes=AXES).decide(state).action
+        second = PoliceBrain(axes=AXES).decide(state).action
+        assert first == second
+
+    def test_it_never_returns_an_illegal_move(self) -> None:
+        brain = PoliceBrain(axes=AXES)
+        walls = frozenset({(1, 1), (2, 2), (4, 4)})
+        for row in range(7):
+            for col in range(7):
+                state = make(cop=(row, col), thief=(6, 0), barriers=walls)
+                if state.is_barrier(state.cop):
+                    continue
+                action = brain.decide(state).action
+                assert isinstance(action, MoveAction)
+                assert action.move in brain.options(state)
