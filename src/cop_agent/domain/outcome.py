@@ -12,7 +12,7 @@ from enum import Enum
 
 from ..shared.appendix_f import book_int
 from .axes import AxisConvention
-from .board import BoardState
+from .board import BoardState, Position
 from .rules import blocked_neighbours
 
 
@@ -114,3 +114,38 @@ def technical_loss_scores() -> tuple[int, int]:
     deviating from a fixed value disqualifies the team.
     """
     return (0, 0)
+
+
+def capture_claim(state: BoardState, axes: AxisConvention) -> Position | None:
+    """The cell to claim capture on, or ``None``. **The only emitter.**
+
+    A Capture Claim binds the cop as much as the thief. It has to be derivable
+    from verified board state, and a false one is exposed at the log audit and
+    disqualifies the team outright with no appeal — a harsher penalty than
+    losing every match in the series.
+
+    So there is exactly one function that can produce a claim, it takes the
+    board and nothing else, and it has no argument that could express *wanting*
+    to claim. A policy cannot pass a flag; a brain cannot pass a preference.
+    The only way to obtain a claim is to be in a position that already is one.
+
+    Returned as the thief's cell rather than as a boolean, because a claim has
+    to say **where**: the opponent verifies it against their own board, and
+    "I captured you" is not checkable while "I captured you at (3,4)" is.
+    """
+    captured = (
+        is_capture_by_overlap(state)
+        or is_trapping_capture(state)
+        or is_enclosure_capture(state, axes)
+    )
+    return state.thief if captured else None
+
+
+def claim_is_supported(state: BoardState, axes: AxisConvention, at: Position) -> bool:
+    """Whether a claim at ``at`` is one this board actually shows.
+
+    Used on the receiving side, against the opponent's claim, and on ours
+    before sending. Both directions matter and for opposite reasons: theirs may
+    be false, and ours may be right about the capture and wrong about the cell.
+    """
+    return capture_claim(state, axes) == at
