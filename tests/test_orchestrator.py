@@ -180,6 +180,34 @@ class TestHandshakeChecks:
         with pytest.raises(MatchAborted, match="routes nowhere"):
             orch.accept_greeting(orch.greeting(OUR_URL, "s82kma9e"))
 
+    def test_the_newest_greeting_wins_over_a_stale_one(self) -> None:
+        """A greeting says where a peer is *now*; an older one is superseded.
+
+        Greetings genuinely accumulate — a peer whose first announcement failed
+        sends a second, and a series re-greets before every sub-game. Reading
+        the queue in arrival order would adopt an address already left behind.
+        """
+        orch, _ = orchestrator()
+        inbound(orch, url="https://thief-stale.ngrok-free.app")
+        inbound(orch, url="https://thief-fresh.ngrok-free.app")
+        accepted = orch.accept_greeting(orch.greeting(OUR_URL, "s82kma9e"))
+        assert accepted.public_url == "https://thief-fresh.ngrok-free.app/mcp"
+
+    def test_the_stale_greetings_are_drained_not_left_behind(self) -> None:
+        """Otherwise the next sub-game reads the one this one skipped."""
+        orch, _ = orchestrator()
+        inbound(orch, url="https://thief-stale.ngrok-free.app")
+        inbound(orch, url="https://thief-fresh.ngrok-free.app")
+        orch.accept_greeting(orch.greeting(OUR_URL, "s82kma9e"))
+        assert orch.inboxes.agreements.empty()
+
+    def test_a_single_greeting_still_works(self) -> None:
+        orch, _ = orchestrator()
+        inbound(orch)
+        assert orch.accept_greeting(orch.greeting(OUR_URL, "s82kma9e")).public_url == (
+            f"{THEIR_URL}/mcp"
+        )
+
     def test_silence_is_a_timeout_not_a_longer_wait(self) -> None:
         """A handshake with no deadline deadlocks with no board to explain it."""
         orch, _ = orchestrator()
@@ -225,8 +253,8 @@ ROTATED = "https://thief-e5f6.ngrok-free.app"
 
 
 class TestSurvivingARotatedTunnel:
-    def opened(self, tmp_path: Path) -> tuple[Orchestrator, Peering]:
-        orch, _ = orchestrator()
+    def opened(self, tmp_path: Path, *outcomes: object) -> tuple[Orchestrator, Peering]:
+        orch, _ = orchestrator(*outcomes)
         inbound(orch)
         return orch, orch.open_series(orch.greeting(OUR_URL, "s82kma9e"), tmp_path, "g1")
 
@@ -254,6 +282,24 @@ class TestSurvivingARotatedTunnel:
         second = orch.rehandshake(first, orch.greeting(OUR_URL, "s82kma9e"), 2, tmp_path, "g1")
         assert second.sub_game == 2
         assert len(orch.client.relocations) == 1  # the opening adoption, nothing since
+
+    def test_a_failed_announcement_is_tolerated_then_retried_at_the_new_address(
+        self, tmp_path: Path
+    ) -> None:
+        """If *their* tunnel died, the address we hold died with it.
+
+        Announcing before listening would abort on the very failure the
+        re-handshake exists to recover from. Announcing *not at all* would
+        strand them when it is *our* tunnel that moved. So: try, tolerate,
+        listen, adopt, and try again if the first never landed.
+        """
+        # The opening announce lands; the re-handshake's first one exhausts
+        # its whole retry budget against an address that no longer exists.
+        orch, first = self.opened(tmp_path, {"ok": True}, *[ConnectionError()] * 4)
+        inbound(orch, url=ROTATED)
+        orch.rehandshake(first, orch.greeting(OUR_URL, "s82kma9e"), 2, tmp_path, "g1")
+        assert "announce-failed" in orch.heartbeats
+        assert orch.client.opponent_url == f"{ROTATED}/mcp"
 
     def test_a_new_opponent_url_re_points_the_client(self, tmp_path: Path) -> None:
         orch, first = self.opened(tmp_path)

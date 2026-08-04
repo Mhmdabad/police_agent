@@ -139,6 +139,52 @@ class Orchestrator:
         self.beat("announce")
         return self.call_opponent("negotiate", {"greeting": ours.to_dict()})
 
+    def latest_agreement(self, timeout: float) -> dict[str, Any]:
+        """Take the **newest** greeting waiting in the mailbox, not the oldest.
+
+        A greeting states where a peer is *now*, so an older one is superseded
+        by definition. Reading the queue in arrival order would mean adopting
+        an address the opponent has already left — and greetings genuinely do
+        accumulate: a peer whose first announcement failed sends a second, and
+        a series re-greets before every sub-game.
+
+        The oldest-first version of this looked correct for four stages because
+        nothing announced twice until tunnel rotation arrived.
+
+        Raises:
+            MatchAborted: ``TIMEOUT`` if the mailbox is empty when the window
+                closes. A missed deadline is a failure, not a reason to wait.
+        """
+        try:
+            message = self.inboxes.agreements.get(timeout=timeout)
+        except queue.Empty:
+            raise MatchAborted(
+                TechnicalLoss.TIMEOUT, f"no greeting from the opponent within {timeout}s"
+            ) from None
+        while True:
+            try:
+                message = self.inboxes.agreements.get_nowait()
+            except queue.Empty:
+                return message
+
+    def try_announce(self, ours: Greeting) -> bool:
+        """Announce, tolerating an outbound path that no longer exists.
+
+        Only for the re-handshake, where the address we hold may be the very
+        thing that has gone stale. Everywhere else a failed call is a technical
+        loss and should stay one — a helper that quietly swallows unreachable
+        opponents is the fastest way to turn a lost match into a silent one.
+
+        Returns:
+            Whether the announcement actually landed.
+        """
+        try:
+            self.announce(ours)
+        except MatchAborted:
+            self.beat("announce-failed")
+            return False
+        return True
+
     def accept_greeting(self, ours: Greeting, timeout: float = GREETING_TIMEOUT_SEC) -> Greeting:
         """Take the opponent's greeting off the queue and decide if we can play.
 
@@ -157,12 +203,7 @@ class Orchestrator:
                 against. A missed deadline is a failure, not a reason to wait.
         """
         self.beat("accept_greeting")
-        try:
-            message = self.inboxes.agreements.get(timeout=timeout)
-        except queue.Empty:
-            raise MatchAborted(
-                TechnicalLoss.TIMEOUT, f"no greeting from the opponent within {timeout}s"
-            ) from None
+        message = self.latest_agreement(timeout)
         try:
             theirs = Greeting.from_dict(message.get("greeting"))
             check(ours, theirs)
@@ -236,12 +277,31 @@ class Orchestrator:
         rotated tunnel, it is a different peer arriving mid-series — and
         refuses any change that does not follow a sub-game boundary.
 
+        **The first announcement is allowed to fail.** This is the part that
+        makes rotation actually survivable, and it is not obvious. If *their*
+        tunnel is the one that died, the address we hold is dead with it, so
+        announcing before listening would abort on the very failure we are here
+        to recover from. But if *our* tunnel is the one that moved, they cannot
+        reach us at all and announcing is the only way they ever learn where we
+        went — so it cannot simply be dropped either.
+
+        So: announce, tolerating failure; listen; adopt whatever address their
+        greeting carries; and announce again if the first attempt never landed.
+        Between them the two orders cover both single failures. If **both**
+        tunnels rotate at once neither side can reach the other and the
+        sub-game is genuinely lost — there is no in-band channel left, and
+        pretending otherwise would only replace a clean timeout with a hang.
+
+        Swallowing that first failure is safe only because the wait that
+        follows carries its own deadline: an opponent who really has gone
+        produces a ``TIMEOUT`` a moment later rather than silence.
+
         Raises:
             MatchAborted: ``TIMEOUT`` if the opponent never re-greets,
                 ``ILLEGAL_ACTION`` if the greeting is not a rotation of the one
                 already agreed.
         """
-        self.announce(ours)
+        announced = self.try_announce(ours)
         theirs = self.accept_greeting(ours, timeout)
         try:
             later = current.rotate(ours, theirs, sub_game)
@@ -249,6 +309,8 @@ class Orchestrator:
             raise MatchAborted(TechnicalLoss.ILLEGAL_ACTION, str(exc)) from exc
 
         self.adopt(later.theirs)
+        if not announced:
+            self.announce(ours)
         for role, (was, now) in sorted(current.relocations(later).items()):
             self.beat(f"agreed-move:{role}:{was}->{now}")
         record(directory, game_id, AddressBook.peered(later))

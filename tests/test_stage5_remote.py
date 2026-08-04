@@ -25,14 +25,16 @@ from typing import Any
 
 import pytest
 
-from cop_agent.infra.handshake import ADDRESS_KEY
+from cop_agent.domain.outcome import TechnicalLoss
+from cop_agent.infra.handshake import ADDRESS_KEY, Greeting, Peering
 from cop_agent.infra.inboxes import PeerInboxes
 from cop_agent.infra.mcp_client import OPPONENT_URL_ENV, ClientSettings, OpponentClient
-from cop_agent.runtime.orchestrator import MatchAborted, Orchestrator
+from cop_agent.runtime.orchestrator import PROTOCOL_VERSION, MatchAborted, Orchestrator
 
 COP_URL = "https://cop-a1b2.ngrok-free.app/mcp"
 THIEF_URL = "https://thief-c3d4.ngrok-free.app/mcp"
 MOVED_THIEF_URL = "https://thief-e5f6.ngrok-free.app/mcp"
+MOVED_COP_URL = "https://cop-9z8y.ngrok-free.app/mcp"
 TURN = {
     "step": 1,
     "sender": "thief",
@@ -180,6 +182,62 @@ class TestSurvivingATunnelRestartMidSeries:
         net.listen(MOVED_THIEF_URL, thief)
         with pytest.raises(MatchAborted):
             cop.call_opponent("receive_turn", TURN)
+
+    def test_our_own_tunnel_moving_is_survivable_the_other_way_round(
+        self, wired: tuple[Internet, Orchestrator, Orchestrator], tmp_path: Path
+    ) -> None:
+        """The mirror case, and the reason the first announcement is still made.
+
+        If *we* moved, they cannot reach us and announcing is the only way they
+        ever learn where we went. Listening first would deadlock — they are
+        waiting for a greeting they have no address to ask for.
+
+        Both sides run the same ``rehandshake``; this drives them in the order
+        a real pair would fall into, since only one of the two can speak first.
+        """
+        net, cop, thief = wired
+        thief.announce(thief.greeting(THIEF_URL, "them"))
+        first = cop.open_series(cop.greeting(COP_URL, "s82kma9e"), tmp_path, "g1")
+        theirs = Peering(
+            thief.greeting(THIEF_URL, "them"),
+            Greeting("police", "s82kma9e", COP_URL, PROTOCOL_VERSION),
+            sub_game=1,
+        )
+
+        # Our tunnel is recycled. Their address still works, so we can still
+        # reach them — they cannot reach us until they hear it from us.
+        del net.hosts[COP_URL]
+        net.listen(MOVED_COP_URL, cop)
+        moved = cop.greeting(MOVED_COP_URL, "s82kma9e")
+        assert cop.try_announce(moved) is True
+
+        thief.rehandshake(theirs, thief.greeting(THIEF_URL, "them"), 2, tmp_path, "g2")
+        assert thief.client.opponent_url == MOVED_COP_URL
+        assert "announce-failed" in thief.heartbeats
+
+        second = cop.rehandshake(first, moved, 2, tmp_path, "g1")
+        assert second.ours.public_url == MOVED_COP_URL
+
+    def test_both_tunnels_rotating_at_once_is_a_clean_timeout(
+        self, wired: tuple[Internet, Orchestrator, Orchestrator], tmp_path: Path
+    ) -> None:
+        """Genuinely unrecoverable — there is no in-band channel left.
+
+        What matters is that it ends as a named ``TIMEOUT`` rather than a hang.
+        Pretending to recover would only replace a clean technical loss with a
+        match that never finishes.
+        """
+        net, cop, thief = wired
+        thief.announce(thief.greeting(THIEF_URL, "them"))
+        first = cop.open_series(cop.greeting(COP_URL, "s82kma9e"), tmp_path, "g1")
+
+        net.hosts.clear()
+        with pytest.raises(MatchAborted) as excinfo:
+            cop.rehandshake(
+                first, cop.greeting(MOVED_COP_URL, "s82kma9e"), 2, tmp_path, "g1", timeout=0.0
+            )
+        assert excinfo.value.cause is TechnicalLoss.TIMEOUT
+        assert "announce-failed" in cop.heartbeats
 
     def test_the_declaration_says_which_sub_game_the_move_took_effect(
         self, wired: tuple[Internet, Orchestrator, Orchestrator], tmp_path: Path
