@@ -133,11 +133,12 @@ def capture_claim(state: BoardState, axes: AxisConvention) -> Position | None:
     to say **where**: the opponent verifies it against their own board, and
     "I captured you" is not checkable while "I captured you at (3,4)" is.
     """
-    if is_capture_by_overlap(state) or is_trapping_capture(state):
-        return state.thief
-    if is_enclosure_capture(state, axes):
-        return state.thief
-    return None
+    captured = (
+        is_capture_by_overlap(state)
+        or is_trapping_capture(state)
+        or is_enclosure_capture(state, axes)
+    )
+    return state.thief if captured else None
 
 
 def claim_is_supported(state: BoardState, axes: AxisConvention, at: Position) -> bool:

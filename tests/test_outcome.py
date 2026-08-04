@@ -231,7 +231,7 @@ class TestOnlyTheBoardCanProduceAClaim:
         assert capture_claim(board(barriers=frozenset({(3, 3)})), AXES) == (3, 3)
 
     def test_walling_the_thief_in_yields_a_claim(self) -> None:
-        walled = board(thief=(0, 0), barriers=frozenset({(0, 1), (1, 0)}))
+        walled = board(cop=(5, 5), thief=(0, 0), barriers=frozenset({(0, 1), (1, 0)}))
         assert capture_claim(walled, AXES) == (0, 0)
 
     def test_it_takes_the_board_and_nothing_else(self) -> None:
