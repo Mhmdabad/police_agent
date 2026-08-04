@@ -24,6 +24,7 @@ order that reflects what each check costs to get wrong:
    against each other, with both sides of the comparison written to the log.
 """
 
+import logging
 from dataclasses import dataclass, replace
 
 from ..domain.actions import Action, MoveAction, PlaceBarrier
@@ -33,6 +34,8 @@ from ..domain.search import reachable_area
 from .barriers import winning_placement
 from .base import BrainBase, NoLegalActionError
 from .tradeoff import weigh
+
+logger = logging.getLogger(__name__)
 
 
 def manhattan(a: Position, b: Position) -> int:
@@ -65,6 +68,11 @@ class PoliceBrain(BrainBase):
         records, so a placement that is never weighed against the move it
         replaced is a placement nobody can argue with afterwards.
 
+        The seed goes out on every turn rather than once at startup. A match
+        transcript is the artefact a bug report is reconstructed from, and a
+        seed recorded only in a line that may have been truncated, rotated or
+        never captured is a seed the reproduction does not have.
+
         The move is validated *before* it is weighed, not only afterwards by
         the guard in :meth:`~.base.BrainBase.decide`. An illegal move has no
         meaningful distance: stepping off the board produces a number, the
@@ -74,13 +82,14 @@ class PoliceBrain(BrainBase):
         broken policy would be silently absorbed rather than reported.
         """
         goal = self.target(state, **context)
-        win = winning_placement(state, self.axes)
+        logger.info("step %d seed=%d cop=%s target=%s", state.step, self.seed, state.cop, goal)
+        win = winning_placement(state, self.axes, self.max_barriers)
         if win is not None:
             return PlaceBarrier(win)
 
         move = self._pick_move(state, **context)
         self._guard(state, MoveAction(move))
-        call = weigh(state, self.axes, goal, move, self.concentration(**context))
+        call = weigh(state, self.axes, goal, move, self.concentration(**context), self.max_barriers)
         if call.place and call.placement is not None:
             return PlaceBarrier(call.placement.at)
         return MoveAction(move)
