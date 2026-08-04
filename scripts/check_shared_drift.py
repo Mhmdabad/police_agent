@@ -75,6 +75,7 @@ DIVERGENT: dict[str, str] = {
     "strategy/loader.py": "reads police_class vs thief_class",
     "strategy/barriers.py": "cop-only; the thief has no barriers to place",
     "strategy/budget.py": "cop-only; the thief has no quota to spend",
+    "strategy/pursuit.py": "cop-only; only the cop re-aims a pursuit",
     "strategy/tradeoff.py": "cop-only; only the cop forfeits movement to place",
     "strategy/police_brain.py": "the cop's policy; no counterpart there",
     "strategy/thief_brain.py": "the thief's policy; no counterpart here",
