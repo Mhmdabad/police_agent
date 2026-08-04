@@ -24,7 +24,14 @@ from pathlib import Path
 from typing import Any
 
 from ..domain.outcome import TechnicalLoss
-from ..infra.handshake import AddressBook, Greeting, HandshakeError, check, record
+from ..infra.handshake import (
+    AddressBook,
+    Greeting,
+    HandshakeError,
+    Peering,
+    check,
+    record,
+)
 from ..infra.inboxes import PeerInboxes
 from ..infra.mcp_client import OpponentClient, OpponentUnreachableError
 from ..shared.config import config_sha256
@@ -163,23 +170,89 @@ class Orchestrator:
             raise MatchAborted(TechnicalLoss.ILLEGAL_ACTION, str(exc)) from exc
         return theirs
 
-    def exchange_addresses(
+    def open_series(
         self,
         ours: Greeting,
         directory: Path,
         game_id: str,
         timeout: float = GREETING_TIMEOUT_SEC,
-    ) -> AddressBook:
+    ) -> Peering:
         """Trade addresses and write both into the pre-game declaration.
 
         Announcing first is deliberate. Waiting for the opponent before saying
         anything is a handshake where two polite peers wait for each other
         forever — the deadlock the state machine exists to make impossible.
+
+        Returns the addresses in force for sub-game 1. Later sub-games go
+        through :meth:`rehandshake`, which is the same exchange with the
+        additional rule that only the address may have moved.
         """
         self.announce(ours)
-        book = AddressBook.of(ours, self.accept_greeting(ours, timeout))
-        record(directory, game_id, book)
-        return book
+        peering = Peering(ours, self.accept_greeting(ours, timeout), sub_game=1)
+        self.adopt(peering.theirs)
+        record(directory, game_id, AddressBook.peered(peering))
+        return peering
+
+    def adopt(self, theirs: Greeting) -> None:
+        """Point the client at the address the opponent actually announced.
+
+        ``opponent_url`` in the private config is a **bootstrap** address: it
+        is how we reach them the first time, and it is whatever we were told
+        out of band. Their greeting is the authoritative statement of where
+        they are, and it is the value the declaration records — so calls that
+        went somewhere else would contradict the file we both signed.
+
+        Only ever called from an accepted greeting. Following a redirect the
+        transport happened to return would be a different thing entirely.
+        """
+        was = self.client.repoint(theirs.public_url)
+        if was != theirs.public_url:
+            self.beat(f"relocated:{theirs.role}:{was}->{theirs.public_url}")
+
+    def rehandshake(
+        self,
+        current: Peering,
+        ours: Greeting,
+        sub_game: int,
+        directory: Path,
+        game_id: str,
+        timeout: float = GREETING_TIMEOUT_SEC,
+    ) -> Peering:
+        """Re-agree addresses before a later sub-game, and re-point if they moved.
+
+        Free-tier tunnels issue a new URL on every restart, so a six-sub-game
+        series can outlive the tunnel it started on. Losing the series to that
+        would be absurd — and expensive, because a technical loss scores zero
+        for **both** sides, so a dead tunnel destroys sub-games already won on
+        the board.
+
+        Both peers re-greet every sub-game, whether or not anything moved. A
+        re-handshake that only happens when we already know something changed
+        is a re-handshake that cannot discover the thing it exists to discover:
+        the side whose tunnel died is precisely the side that cannot tell us.
+
+        Nothing but the address may move. :meth:`Peering.rotate` refuses a
+        greeting that also changes role, team or protocol — that is not a
+        rotated tunnel, it is a different peer arriving mid-series — and
+        refuses any change that does not follow a sub-game boundary.
+
+        Raises:
+            MatchAborted: ``TIMEOUT`` if the opponent never re-greets,
+                ``ILLEGAL_ACTION`` if the greeting is not a rotation of the one
+                already agreed.
+        """
+        self.announce(ours)
+        theirs = self.accept_greeting(ours, timeout)
+        try:
+            later = current.rotate(ours, theirs, sub_game)
+        except HandshakeError as exc:
+            raise MatchAborted(TechnicalLoss.ILLEGAL_ACTION, str(exc)) from exc
+
+        self.adopt(later.theirs)
+        for role, (was, now) in sorted(current.relocations(later).items()):
+            self.beat(f"agreed-move:{role}:{was}->{now}")
+        record(directory, game_id, AddressBook.peered(later))
+        return later
 
     def agree_config(self, config: dict[str, Any]) -> str:
         """Exchange config digests, refusing to play on any mismatch.

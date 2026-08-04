@@ -32,6 +32,7 @@ from cop_agent.runtime.orchestrator import MatchAborted, Orchestrator
 
 COP_URL = "https://cop-a1b2.ngrok-free.app/mcp"
 THIEF_URL = "https://thief-c3d4.ngrok-free.app/mcp"
+MOVED_THIEF_URL = "https://thief-e5f6.ngrok-free.app/mcp"
 TURN = {
     "step": 1,
     "sender": "thief",
@@ -97,8 +98,8 @@ class TestAFullRoundOverPublicAddresses:
         cop.announce(ours)
         thief.announce(theirs)
 
-        book = cop.exchange_addresses(ours, tmp_path, "uoh26-s82kma9e")
-        assert book.complete
+        peering = cop.open_series(ours, tmp_path, "uoh26-s82kma9e")
+        assert peering.sub_game == 1
         written = json.loads((tmp_path / "declaration_uoh26-s82kma9e.json").read_text())
         assert written[ADDRESS_KEY]["police"]["public_url"] == COP_URL
         assert written[ADDRESS_KEY]["thief"]["public_url"] == THIEF_URL
@@ -118,7 +119,7 @@ class TestAFullRoundOverPublicAddresses:
         """The stage 5 milestone: handshake, then turns, over public addresses."""
         net, cop, thief = wired
         thief.announce(thief.greeting(THIEF_URL, "them"))
-        cop.exchange_addresses(cop.greeting(COP_URL, "s82kma9e"), tmp_path, "g1")
+        cop.open_series(cop.greeting(COP_URL, "s82kma9e"), tmp_path, "g1")
 
         for step in range(1, 6):
             assert thief.call_opponent("receive_turn", {**TURN, "step": step})["ok"] is True
@@ -140,6 +141,59 @@ class TestAFullRoundOverPublicAddresses:
         del net.hosts[THIEF_URL]
         with pytest.raises(MatchAborted, match="nothing answers|after 4 attempts"):
             cop.call_opponent("receive_turn", TURN)
+
+
+class TestSurvivingATunnelRestartMidSeries:
+    """The stage 5 milestone: a new URL between sub-games, no restart."""
+
+    def test_the_series_continues_at_the_new_address(
+        self, wired: tuple[Internet, Orchestrator, Orchestrator], tmp_path: Path
+    ) -> None:
+        net, cop, thief = wired
+        thief.announce(thief.greeting(THIEF_URL, "them"))
+        first = cop.open_series(cop.greeting(COP_URL, "s82kma9e"), tmp_path, "g1")
+        assert cop.call_opponent("receive_turn", TURN)["ok"] is True
+
+        # The thief's free-tier tunnel is recycled between sub-games.
+        del net.hosts[THIEF_URL]
+        net.listen(MOVED_THIEF_URL, thief)
+        thief.announce(thief.greeting(MOVED_THIEF_URL, "them"))
+
+        second = cop.rehandshake(first, cop.greeting(COP_URL, "s82kma9e"), 2, tmp_path, "g1")
+        assert second.theirs.public_url == MOVED_THIEF_URL
+        assert cop.call_opponent("receive_turn", {**TURN, "step": 2})["ok"] is True
+        assert net.delivered[-1] == (MOVED_THIEF_URL, "receive_turn")
+
+    def test_without_the_re_handshake_the_old_address_is_dead(
+        self, wired: tuple[Internet, Orchestrator, Orchestrator], tmp_path: Path
+    ) -> None:
+        """What the re-handshake is worth: the whole series, not one sub-game.
+
+        A technical loss scores zero for **both** sides, so a tunnel recycled
+        partway through destroys sub-games already won on the board.
+        """
+        net, cop, thief = wired
+        thief.announce(thief.greeting(THIEF_URL, "them"))
+        cop.open_series(cop.greeting(COP_URL, "s82kma9e"), tmp_path, "g1")
+
+        del net.hosts[THIEF_URL]
+        net.listen(MOVED_THIEF_URL, thief)
+        with pytest.raises(MatchAborted):
+            cop.call_opponent("receive_turn", TURN)
+
+    def test_the_declaration_says_which_sub_game_the_move_took_effect(
+        self, wired: tuple[Internet, Orchestrator, Orchestrator], tmp_path: Path
+    ) -> None:
+        net, cop, thief = wired
+        thief.announce(thief.greeting(THIEF_URL, "them"))
+        first = cop.open_series(cop.greeting(COP_URL, "s82kma9e"), tmp_path, "g1")
+        net.listen(MOVED_THIEF_URL, thief)
+        thief.announce(thief.greeting(MOVED_THIEF_URL, "them"))
+        cop.rehandshake(first, cop.greeting(COP_URL, "s82kma9e"), 2, tmp_path, "g1")
+
+        written = json.loads((tmp_path / "declaration_g1.json").read_text())
+        assert written[ADDRESS_KEY]["thief"]["since_sub_game"] == 2
+        assert written[ADDRESS_KEY]["police"]["public_url"] == COP_URL
 
 
 class TestConfiguringTheRemotePeer:
