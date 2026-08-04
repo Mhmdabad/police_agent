@@ -165,3 +165,45 @@ class TestTheBrainWiresItTogether:
 
     def test_a_nonsense_concentration_falls_back_rather_than_crashing(self) -> None:
         assert PoliceBrain(axes=AXES).concentration(concentration="soon") == 1.0
+
+
+class TestTheNegotiatedQuotaIsHonoured:
+    """The quota is an Appendix F *minimum*, so it varies between matches."""
+
+    def test_the_policy_budgets_against_the_brains_limit_not_the_book(self) -> None:
+        """Found by a determinism test, not by a strategy one.
+
+        The comparison used to build its Budget from the book value while the
+        guard enforced the brain's configured quota. With six barriers down
+        and a negotiated limit of six, the policy proposed a placement and the
+        guard refused it — a crash on the cop's own turn rather than a
+        decision, and a technical loss worth zero to both sides.
+        """
+        state = board(cop=(2, 1), thief=(2, 5), barriers=CORRIDOR)
+        assert state.barriers_used == 6
+        assert weigh(state, AXES, (2, 5), "E", max_barriers=14).place
+        assert not weigh(state, AXES, (2, 5), "E", max_barriers=6).place
+
+    def test_the_brain_falls_through_to_moving(self) -> None:
+        state = board(cop=(2, 1), thief=(2, 5), barriers=CORRIDOR)
+        assert isinstance(PoliceBrain(axes=AXES).decide(state).action, PlaceBarrier)
+        spent = PoliceBrain(axes=AXES, max_barriers=6).decide(state).action
+        assert isinstance(spent, MoveAction)
+
+    def test_a_raised_quota_is_spendable_once_it_clears_the_reserve(self) -> None:
+        """Raising it by agreement is legal; the policy must notice — and the
+        reserve rides on the negotiated limit rather than the book one, so the
+        boundary moves with it."""
+        walls = CORRIDOR | {(6, col) for col in range(4)}
+        state = board(cop=(2, 1), thief=(2, 5), barriers=walls)
+        assert state.barriers_used == 9
+        assert not weigh(state, AXES, (2, 5), "E", max_barriers=12).place
+        assert weigh(state, AXES, (2, 5), "E", max_barriers=13).place
+        assert Budget(used=9, limit=12).spendable == 0
+        assert Budget(used=9, limit=13).spendable == 1
+
+    def test_a_win_respects_it_too(self) -> None:
+        walls = frozenset({(6, col) for col in range(7)})
+        state = board(cop=(3, 3), thief=(3, 4), barriers=walls)
+        assert PoliceBrain(axes=AXES).decide(state).action == PlaceBarrier((3, 4))
+        assert isinstance(PoliceBrain(axes=AXES, max_barriers=7).decide(state).action, MoveAction)

@@ -27,6 +27,7 @@ lost the endgame it has not reached yet.
 import logging
 from dataclasses import dataclass
 
+from ..domain.actions import DEFAULT_MAX_BARRIERS
 from ..domain.axes import AxisConvention
 from ..domain.board import BoardState, Move, Position
 from ..domain.rules import target_of
@@ -105,9 +106,18 @@ def weigh(
     target: Position,
     best_move: Move | None,
     concentration: float = 1.0,
+    max_barriers: int = DEFAULT_MAX_BARRIERS,
 ) -> Tradeoff:
-    """Compare the best placement against the best move, and log both sides."""
-    budget = Budget(used=state.barriers_used)
+    """Compare the best placement against the best move, and log both sides.
+
+    ``max_barriers`` is threaded from the brain rather than defaulted here at
+    the point of use. The quota is a *minimum* in Appendix F — raisable by
+    agreement, and therefore genuinely variable between matches — so a policy
+    that plans against the book value while the guard enforces the negotiated
+    one does not merely play badly. It proposes a placement the guard then
+    refuses, which is a crash on the cop's own turn rather than a decision.
+    """
+    budget = Budget(used=state.barriers_used, limit=max_barriers)
     endgame = looks_like_endgame(state, axes, target)
     call = Tradeoff(
         placement=best_placement(state, axes, target),
