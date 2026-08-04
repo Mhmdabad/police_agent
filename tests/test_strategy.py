@@ -6,12 +6,17 @@ from typing import Any
 
 import pytest
 
-from cop_agent.domain.actions import MoveAction, PlaceBarrier
+from cop_agent.domain.actions import MoveAction, PlaceBarrier, placement_range
 from cop_agent.domain.axes import AxisConvention
-from cop_agent.domain.board import MOVES, BoardState, Move
+from cop_agent.domain.board import MOVES, Agent, BoardState, Move
+from cop_agent.domain.outcome import is_capture_by_overlap
+from cop_agent.domain.rules import target_of
+from cop_agent.domain.search import reachable_area
+from cop_agent.strategy.barriers import winning_placement
 from cop_agent.strategy.base import BrainBase, Decision, NoLegalActionError
 from cop_agent.strategy.loader import DEFAULT_BRAIN, StrategyError, load_brain
 from cop_agent.strategy.police_brain import PoliceBrain, manhattan
+from cop_agent.strategy.tradeoff import weigh
 
 AXES = AxisConvention()
 
@@ -52,18 +57,32 @@ class TestPursuit:
         assert isinstance(action, MoveAction)
         assert action.move in {"S", "E"}
 
-    def test_never_increases_the_distance(self) -> None:
+    def test_never_increases_the_distance_when_it_chooses_to_move(self) -> None:
+        """The pursuit invariant, now scoped to the turns it governs.
+
+        Since #45 and #46 the cop also has a placement turn, so "the action is
+        a move" is no longer an invariant of the policy. Where a win exists the
+        assertion is stronger — the win is taken — and where the cop moves the
+        old invariant holds unchanged.
+        """
         brain = PoliceBrain(axes=AXES)
+        placements = 0
         for row in range(7):
             for col in range(7):
                 state = make(cop=(row, col), thief=(6, 6))
+                if is_capture_by_overlap(state):
+                    continue  # already won; decide() is not defined for a finished position
                 before = manhattan(state.cop, state.thief)
                 action = brain.decide(state).action
+                win = winning_placement(state, AXES)
+                if win is not None:
+                    assert action == PlaceBarrier(win)
+                    placements += 1
+                    continue
                 assert isinstance(action, MoveAction)
-                from cop_agent.domain.rules import target_of
-
                 after = manhattan(target_of(state.cop, action.move, AXES), state.thief)
                 assert after <= before
+        assert placements > 0, "the sweep never reached a winning position"
 
     def test_an_explicit_target_overrides_the_thief_position(self) -> None:
         """Once a belief map exists it supplies the target instead."""
@@ -95,8 +114,11 @@ class TestLegalityGuard:
                 if state.is_barrier(state.cop):
                     continue
                 action = brain.decide(state).action
-                assert isinstance(action, MoveAction)
-                assert action.move in brain.options(state)
+                if isinstance(action, PlaceBarrier):
+                    assert action.at in placement_range(state, AXES)
+                    assert not state.is_barrier(action.at)
+                else:
+                    assert action.move in brain.options(state)
 
     def test_a_rogue_subclass_is_caught(self) -> None:
         """Defence in depth: the guard runs on whatever a subclass produced."""
@@ -107,6 +129,22 @@ class TestLegalityGuard:
 
         with pytest.raises(NoLegalActionError, match="not among"):
             Rogue(axes=AXES).decide(make(cop=(0, 0)))
+
+    def test_the_base_default_relocates(self) -> None:
+        """PoliceBrain overrides _decide_move to weigh barriers, so the base
+        class's own default - relocate, no alternative - is only reachable
+        through a role that has none. It is still the contract a thief brain
+        inherits, so it is exercised here rather than left unrun."""
+
+        class MoveOnly(BrainBase):
+            @property
+            def role(self) -> Agent:
+                return "cop"
+
+            def _pick_move(self, state: BoardState, **context: object) -> Move:
+                return "STAY"
+
+        assert MoveOnly(axes=AXES).decide(make()).action == MoveAction("STAY")
 
     def test_the_guard_cannot_be_bypassed_by_overriding_pick_move(self) -> None:
         """`decide` is the entry point; subclasses override the hooks."""
@@ -246,9 +284,26 @@ class TestContainmentTieBreak:
         """A step that seals a region beats one that merely closes distance."""
         walls = frozenset({(0, 2), (1, 2), (3, 2), (4, 2), (5, 2), (6, 2)})
         state = make(cop=(2, 1), thief=(2, 5), barriers=walls)
-        action = PoliceBrain(axes=AXES).decide(state).action
-        assert isinstance(action, MoveAction)
-        assert action.move == "E"
+        assert PoliceBrain(axes=AXES)._pick_move(state) == "E"
+
+    def test_but_a_barrier_on_the_corridor_beats_the_step(self) -> None:
+        """The same position, once #46 lets the two be compared.
+
+        Column 2 is walled except at (2, 2), and the cop stands at (2, 1) on
+        the far side of that gap. Sealing its own cell cuts the fourteen cells
+        of the left region out of the thief's world — a third of the board —
+        while the best step closes one cell of distance. The cop keeps its
+        route out through (2, 2), so nothing is refused.
+        """
+        walls = frozenset({(0, 2), (1, 2), (3, 2), (4, 2), (5, 2), (6, 2)})
+        state = make(cop=(2, 1), thief=(2, 5), barriers=walls)
+        assert reachable_area(state, (2, 5), AXES) == 43
+        call = weigh(state, AXES, (2, 5), "E")
+        assert call.placement is not None
+        assert call.placement.at == (2, 1)
+        assert (call.placement_value, call.move_gain) == (14, 1)
+        assert call.place
+        assert PoliceBrain(axes=AXES).decide(state).action == PlaceBarrier((2, 1))
 
     def test_edge_pressure_prefers_a_cornered_target(self) -> None:
         brain = PoliceBrain(axes=AXES)
@@ -283,5 +338,7 @@ class TestContainmentTieBreak:
                 if state.is_barrier(state.cop):
                     continue
                 action = brain.decide(state).action
-                assert isinstance(action, MoveAction)
-                assert action.move in brain.options(state)
+                if isinstance(action, PlaceBarrier):
+                    assert action.at in placement_range(state, AXES)
+                else:
+                    assert action.move in brain.options(state)
