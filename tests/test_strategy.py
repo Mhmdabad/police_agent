@@ -1,16 +1,23 @@
 """Tests for the cop's brain and its selection from config."""
 
+import random
 import tomllib
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from cop_agent.domain.actions import MoveAction, PlaceBarrier, placement_range
+from cop_agent.domain.actions import (
+    IllegalActionError,
+    MoveAction,
+    PlaceBarrier,
+    place_barrier,
+    placement_range,
+)
 from cop_agent.domain.axes import AxisConvention
 from cop_agent.domain.board import MOVES, Agent, BoardState, Move
 from cop_agent.domain.outcome import is_capture_by_overlap
-from cop_agent.domain.rules import target_of
+from cop_agent.domain.rules import legal_moves, target_of
 from cop_agent.domain.search import reachable_area
 from cop_agent.strategy.barriers import winning_placement
 from cop_agent.strategy.base import BrainBase, Decision, NoLegalActionError
@@ -167,10 +174,78 @@ class TestLegalityGuard:
         with pytest.raises(NoLegalActionError, match="has no legal move"):
             Stubborn(axes=AXES).decide(make(cop=(3, 3), barriers=walls))
 
-    def test_a_barrier_action_passes_the_move_guard(self) -> None:
-        """Placement legality belongs to the domain layer, not here."""
+    def test_a_legal_placement_passes(self) -> None:
+        PoliceBrain(axes=AXES)._guard(make(cop=(0, 0)), PlaceBarrier((1, 0)))
+
+    def test_a_placement_out_of_reach_is_refused(self) -> None:
+        """This used to pass. The guard checked moves and let every barrier
+        through on the grounds that placement legality belonged to the domain
+        layer — which validates it after it has gone out on the wire, where
+        the thief rejects it and we take a technical loss."""
+        with pytest.raises(NoLegalActionError, match="illegal barrier"):
+            PoliceBrain(axes=AXES)._guard(make(cop=(0, 0)), PlaceBarrier((5, 5)))
+
+    def test_a_placement_off_the_board_is_refused(self) -> None:
+        with pytest.raises(NoLegalActionError, match="illegal barrier"):
+            PoliceBrain(axes=AXES)._guard(make(cop=(0, 0)), PlaceBarrier((-1, 0)))
+
+    def test_a_placement_on_an_existing_barrier_is_refused(self) -> None:
+        """Barriers are permanent; sealing one twice spends a barrier on
+        nothing and is not a legal action."""
+        state = make(cop=(0, 0), barriers=frozenset({(1, 0)}))
+        with pytest.raises(NoLegalActionError, match="illegal barrier"):
+            PoliceBrain(axes=AXES)._guard(state, PlaceBarrier((1, 0)))
+
+    def test_a_placement_beyond_the_quota_is_refused(self) -> None:
+        walls = frozenset({(6, col) for col in range(7)})
+        state = make(cop=(0, 0), barriers=walls)
+        brain = PoliceBrain(axes=AXES, max_barriers=7)
+        with pytest.raises(NoLegalActionError, match="illegal barrier"):
+            brain._guard(state, PlaceBarrier((1, 0)))
+
+    def test_the_guard_never_lets_an_illegal_action_through(self) -> None:
+        """#47's acceptance criterion: a property, over random boards, for
+        both kinds of turn."""
+        rng = random.Random(47)
+        cells = [(row, col) for row in range(7) for col in range(7)]
         brain = PoliceBrain(axes=AXES)
-        brain._guard(make(), PlaceBarrier((1, 0)))
+        rejected_moves = rejected_placements = 0
+        for _ in range(200):
+            walls = frozenset(rng.sample(cells, rng.randint(0, 20)))
+            free = [cell for cell in cells if cell not in walls]
+            state = make(cop=rng.choice(free), thief=rng.choice(free), barriers=walls)
+            legal = legal_moves(state, "cop", AXES)
+            reach = placement_range(state, AXES)
+            for move in MOVES:
+                if move in legal:
+                    brain._guard(state, MoveAction(move))
+                else:
+                    rejected_moves += 1
+                    with pytest.raises(NoLegalActionError):
+                        brain._guard(state, MoveAction(move))
+            affordable = state.barriers_used < brain.max_barriers
+            for cell in cells:
+                permitted = affordable and cell in reach and not state.is_barrier(cell)
+                if permitted:
+                    brain._guard(state, PlaceBarrier(cell))
+                else:
+                    rejected_placements += 1
+                    with pytest.raises(NoLegalActionError):
+                        brain._guard(state, PlaceBarrier(cell))
+        assert rejected_moves > 0 and rejected_placements > 0
+
+    def test_the_guard_agrees_with_the_domain_by_construction(self) -> None:
+        """It attempts the placement rather than restating the rules, so the
+        two cannot drift into disagreeing."""
+        state = make(cop=(3, 3), barriers=frozenset({(3, 4)}))
+        for cell in ((3, 4), (0, 0), (3, 3), (2, 3)):
+            try:
+                place_barrier(state, cell, AXES)
+            except IllegalActionError:
+                with pytest.raises(NoLegalActionError):
+                    PoliceBrain(axes=AXES)._guard(state, PlaceBarrier(cell))
+            else:
+                PoliceBrain(axes=AXES)._guard(state, PlaceBarrier(cell))
 
 
 class TestDeterminism:

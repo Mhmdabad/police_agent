@@ -24,7 +24,14 @@ import random
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from ..domain.actions import Action, MoveAction
+from ..domain.actions import (
+    DEFAULT_MAX_BARRIERS,
+    Action,
+    IllegalActionError,
+    MoveAction,
+    PlaceBarrier,
+    place_barrier,
+)
 from ..domain.axes import AxisConvention
 from ..domain.board import Agent, BoardState, Move
 from ..domain.rules import legal_moves
@@ -63,6 +70,7 @@ class BrainBase(ABC):
 
     axes: AxisConvention = field(default_factory=AxisConvention)
     seed: int = 0
+    max_barriers: int = DEFAULT_MAX_BARRIERS
     rng: random.Random = field(init=False)
 
     def __post_init__(self) -> None:
@@ -111,14 +119,27 @@ class BrainBase(ABC):
         it here costs a local error rather than a rejected move and a technical
         loss.
 
+        Both kinds of turn are checked, because the cop has two. A placement
+        is validated by *attempting* it against :func:`~..domain.actions.
+        place_barrier` and discarding the result, rather than by restating
+        reach, occupancy and quota here. Restating them would mean two
+        definitions of a legal placement that agree until one is edited — and
+        the one that decides the match is the opponent's copy of the rules,
+        not ours.
+
         Raises:
-            NoLegalActionError: if the chosen move is not legal.
+            NoLegalActionError: if the action is not legal in this state.
         """
-        if isinstance(action, MoveAction):
-            available = self.options(state)
-            if not available:
-                raise NoLegalActionError(f"{self.role} has no legal move")
-            if action.move not in available:
-                raise NoLegalActionError(
-                    f"{self.role} chose {action.move}, which is not among {available}"
-                )
+        if isinstance(action, PlaceBarrier):
+            try:
+                place_barrier(state, action.at, self.axes, self.max_barriers)
+            except IllegalActionError as exc:
+                raise NoLegalActionError(f"{self.role} chose an illegal barrier: {exc}") from exc
+            return
+        available = self.options(state)
+        if not available:
+            raise NoLegalActionError(f"{self.role} has no legal move")
+        if action.move not in available:
+            raise NoLegalActionError(
+                f"{self.role} chose {action.move}, which is not among {available}"
+            )
