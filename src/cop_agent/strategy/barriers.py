@@ -12,6 +12,14 @@ seal, compared with before. This is the only axis that measures the actual
 objective. A barrier on open ground shaves off nothing and the flood fill says
 so; one that closes a corridor takes a whole region.
 
+Once a belief map exists the reduction is **weighted by the probability the
+thief is in the region being cut off**. Area alone counts cells; what the cop
+is buying is the chance the thief is standing in them. Sealing a large empty
+region spends one of fourteen barriers and a full turn of pursuit to remove
+somewhere the thief demonstrably is not — and on a board with a live belief
+map, the largest regions are frequently the emptiest, because that is where
+the evidence has already ruled the thief out.
+
 **Chain progress.** A wall only encloses when it *lands on something* — an
 existing barrier, or the board edge. Appendix D's arithmetic follows from this:
 enclosure costs two barriers in a corner, three on an edge, four in the open,
@@ -46,6 +54,7 @@ from dataclasses import dataclass, replace
 
 from ..domain.actions import DEFAULT_MAX_BARRIERS, placement_range
 from ..domain.axes import AxisConvention
+from ..domain.belief import Belief
 from ..domain.board import MOVES, BoardState, Position
 from ..domain.outcome import (
     is_capture_by_overlap,
@@ -53,7 +62,7 @@ from ..domain.outcome import (
     is_trapping_capture,
 )
 from ..domain.rules import legal_moves, target_of
-from ..domain.search import is_connected, reachable_area
+from ..domain.search import is_connected, reachable, reachable_area
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +88,8 @@ class BarrierScore:
     chain: int
     disconnects: bool
     immobilises: bool = False
+    severed_belief: float | None = None
+    """Probability mass the seal removes, or ``None`` before belief exists."""
 
     @property
     def permitted(self) -> bool:
@@ -91,14 +102,28 @@ class BarrierScore:
         return not (self.disconnects or self.immobilises)
 
     @property
-    def total(self) -> int:
-        """Higher is better. Chain progress breaks ties on equal reduction.
+    def value(self) -> float:
+        """Escape reduction, weighted by belief when a belief map exists.
+
+        Cells are what the flood fill counts; probability is what the barrier
+        buys. A region twice the size but a tenth as likely is worth a fifth
+        as much, and on a board with a live belief map the largest regions are
+        frequently the emptiest — that is where evidence has already ruled the
+        thief out.
+        """
+        if self.severed_belief is None:
+            return float(self.escape_reduction)
+        return self.escape_reduction * self.severed_belief
+
+    @property
+    def total(self) -> float:
+        """Higher is better. Chain progress breaks ties on equal value.
 
         Refused candidates keep a number rather than becoming incomparable, so
         the log can show how good the placement we turned down would have been.
         """
         penalty = 0 if self.permitted else SELF_PENALTY
-        return self.escape_reduction + self.chain - penalty
+        return self.value + self.chain - penalty
 
     @property
     def veto(self) -> str:
@@ -111,9 +136,10 @@ class BarrierScore:
 
     def __str__(self) -> str:
         refused = f" {self.veto}" if self.veto else ""
+        mass = "" if self.severed_belief is None else f" belief-{self.severed_belief:.0%}"
         return (
-            f"{self.at} total={self.total} "
-            f"(escape-{self.escape_reduction} chain+{self.chain}){refused}"
+            f"{self.at} total={self.total:g} "
+            f"(escape-{self.escape_reduction}{mass} chain+{self.chain}){refused}"
         )
 
 
@@ -209,24 +235,56 @@ def still_reaches(sealed: BoardState, target: Position, axes: AxisConvention) ->
     )
 
 
+def severed_mass(
+    state: BoardState,
+    sealed: BoardState,
+    at: Position,
+    axes: AxisConvention,
+    target: Position,
+    belief: Belief,
+) -> float:
+    """Belief carried by the cells the seal removes from the thief's reach.
+
+    The cells lost are those reachable before and not after, plus the sealed
+    cell itself — a barrier on the thief's own most-likely square removes that
+    square's mass even though it was never "cut off" from anything. Summing
+    belief over exactly those cells answers what the wall is actually buying.
+    """
+    lost = reachable(state, target, axes) - reachable(sealed, target, axes)
+    return sum(belief.at(cell) for cell in lost | {at})
+
+
 def score_placement(
-    state: BoardState, at: Position, axes: AxisConvention, target: Position
+    state: BoardState,
+    at: Position,
+    axes: AxisConvention,
+    target: Position,
+    belief: Belief | None = None,
 ) -> BarrierScore:
-    """Score sealing ``at``, with the thief believed to be at ``target``."""
+    """Score sealing ``at``, with the thief believed to be at ``target``.
+
+    ``belief`` weights the reduction by the probability the thief is in the
+    region being removed. Omitting it keeps the raw cell count, which is the
+    correct reading before a belief map exists — a uniform belief would scale
+    every candidate identically and change no ranking anyway.
+    """
     sealed = replace(state, barriers=state.barriers | {at})
     before = reachable_area(state, target, axes)
     after = reachable_area(sealed, target, axes)
+    reduction = before - after
+    weight = severed_mass(state, sealed, at, axes, target, belief) if belief else None
     return BarrierScore(
         at=at,
-        escape_reduction=before - after,
+        escape_reduction=reduction,
         chain=chain_progress(state, at, axes),
         disconnects=not still_reaches(sealed, target, axes),
         immobilises=not legal_moves(sealed, "cop", axes),
+        severed_belief=weight,
     )
 
 
 def rank_placements(
-    state: BoardState, axes: AxisConvention, target: Position
+    state: BoardState, axes: AxisConvention, target: Position, belief: Belief | None = None
 ) -> list[BarrierScore]:
     """Every legal placement this turn, best first.
 
@@ -234,7 +292,9 @@ def rank_placements(
     them identically. A ranking that depended on set iteration order would be
     reproducible on one machine and nowhere else.
     """
-    scored = [score_placement(state, cell, axes, target) for cell in candidates(state, axes)]
+    scored = [
+        score_placement(state, cell, axes, target, belief) for cell in candidates(state, axes)
+    ]
     scored.sort(key=lambda score: (-score.total, score.at))
     if scored:
         logger.info(
@@ -249,21 +309,21 @@ def rank_placements(
 
 
 def safe_placements(
-    state: BoardState, axes: AxisConvention, target: Position
+    state: BoardState, axes: AxisConvention, target: Position, belief: Belief | None = None
 ) -> list[BarrierScore]:
     """Ranked placements with the refused ones removed.
 
     The filter is separate from the ranking so that both survive: callers get
     only permitted placements, and the log still records what was rejected.
     """
-    permitted = [score for score in rank_placements(state, axes, target) if score.permitted]
+    permitted = [score for score in rank_placements(state, axes, target, belief) if score.permitted]
     if not permitted:
         logger.info("no permitted placement from cop=%s: every candidate is refused", state.cop)
     return permitted
 
 
 def best_placement(
-    state: BoardState, axes: AxisConvention, target: Position
+    state: BoardState, axes: AxisConvention, target: Position, belief: Belief | None = None
 ) -> BarrierScore | None:
     """The best placement the constraint allows, or ``None`` if there is none.
 
@@ -271,5 +331,5 @@ def best_placement(
     bad one". Not placing costs a barrier we keep; placing a refused one can
     cost the match.
     """
-    permitted = safe_placements(state, axes, target)
+    permitted = safe_placements(state, axes, target, belief)
     return permitted[0] if permitted else None
