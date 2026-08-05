@@ -191,7 +191,7 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · **🚪 GATE** = milesto
       hardware, LLM model, token ceiling, start/end times
 - [x] `config_<game_id>_g<NN>.json` — locked agreed parameters
 - [x] `log_<game_id>_g<NN>.json` — full step record including barrier declarations
-- [ ] `result_<game_id>.json` — per-sub-game and aggregate scores, commit hashes,
+- [x] `result_<game_id>.json` — per-sub-game and aggregate scores, commit hashes,
       total tokens
 - [ ] Shared `game_uid`, names derived from `game_id`
 - **🚪 GATE:** match summary sent via Gmail; GUI displays state; Replay App
