@@ -201,9 +201,9 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · **🚪 GATE** = milesto
 
 ## League play
 
-- [ ] Pre-match negotiation protocol: board, starts, barrier quota, `map_area`,
+- [x] Pre-match negotiation protocol: board, starts, barrier quota, `map_area`,
       timeouts, token ceiling
-- [ ] Exchange and verify `config_sha256`; **refuse to play on mismatch**
+- [x] Exchange and verify `config_sha256`; **refuse to play on mismatch**
 - [ ] **Game-count declaration** at the start of every match (a false declaration
       disqualifies the team)
 - [ ] Warm-up matches against varied strategies (not counted — allowed and encouraged)
