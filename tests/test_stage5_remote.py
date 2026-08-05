@@ -45,12 +45,30 @@ TURN = {
 }
 
 
+def unbind(payload: dict[str, Any]) -> Any:  # noqa: ANN401 - whatever the tool takes
+    """The body FastMCP would pass, from the payload the client sent.
+
+    Every tool in this protocol takes exactly one argument, so the body is the
+    single value. Anything else is a payload a real server would refuse, and
+    refusing it here is the point.
+    """
+    if len(payload) != 1:
+        raise TypeError(f"a tool takes one argument; got {sorted(payload)}")
+    return next(iter(payload.values()))
+
+
 class Internet:
     """Routes calls to whichever peer is listening on a URL.
 
     The whole point of stage 5: a message is addressed, not handed over. A URL
     nobody is serving raises :class:`ConnectionError`, which is what a dead
     tunnel looks like from the other side.
+
+    **It unbinds the tool argument, because the real server does.** FastMCP
+    binds the payload's single key to a named parameter and hands the handler
+    only the body. A double that passed the whole payload through would accept
+    calls a real peer rejects — and did: it was why the announcement could go
+    out under the wrong argument name for four stages without a red test.
     """
 
     def __init__(self) -> None:
@@ -65,7 +83,7 @@ class Internet:
         if url not in self.hosts:
             raise ConnectionError(f"nothing answers at {url}")
         self.delivered.append((url, tool))
-        return self.hosts[url].handle_inbound(tool, payload)
+        return self.hosts[url].handle_inbound(tool, unbind(payload))
 
 
 def peer(net: Internet, role: str, ours: str, theirs: str) -> Orchestrator:
@@ -111,7 +129,7 @@ class TestAFullRoundOverPublicAddresses:
         self, wired: tuple[Internet, Orchestrator, Orchestrator]
     ) -> None:
         net, cop, thief = wired
-        assert thief.call_opponent("receive_turn", TURN)["ok"] is True
+        assert thief.call_opponent("receive_turn", {"message": TURN})["ok"] is True
         assert net.delivered == [(COP_URL, "receive_turn")]
         assert cop.inboxes.turns.get_nowait().hint == "heading for the water"
 
@@ -124,7 +142,10 @@ class TestAFullRoundOverPublicAddresses:
         cop.open_series(cop.greeting(COP_URL, "s82kma9e"), tmp_path, "g1")
 
         for step in range(1, 6):
-            assert thief.call_opponent("receive_turn", {**TURN, "step": step})["ok"] is True
+            assert (
+                thief.call_opponent("receive_turn", {"message": {**TURN, "step": step}})["ok"]
+                is True
+            )
             assert cop.inboxes.turns.get_nowait().step == step
 
         assert [url for url, _ in net.delivered] == [COP_URL, THIEF_URL] + [COP_URL] * 5
@@ -142,7 +163,7 @@ class TestAFullRoundOverPublicAddresses:
         net, cop, _ = wired
         del net.hosts[THIEF_URL]
         with pytest.raises(MatchAborted, match="nothing answers|after 4 attempts"):
-            cop.call_opponent("receive_turn", TURN)
+            cop.call_opponent("receive_turn", {"message": TURN})
 
 
 class TestSurvivingATunnelRestartMidSeries:
@@ -154,7 +175,7 @@ class TestSurvivingATunnelRestartMidSeries:
         net, cop, thief = wired
         thief.announce(thief.greeting(THIEF_URL, "them"))
         first = cop.open_series(cop.greeting(COP_URL, "s82kma9e"), tmp_path, "g1")
-        assert cop.call_opponent("receive_turn", TURN)["ok"] is True
+        assert cop.call_opponent("receive_turn", {"message": TURN})["ok"] is True
 
         # The thief's free-tier tunnel is recycled between sub-games.
         del net.hosts[THIEF_URL]
@@ -163,7 +184,7 @@ class TestSurvivingATunnelRestartMidSeries:
 
         second = cop.rehandshake(first, cop.greeting(COP_URL, "s82kma9e"), 2, tmp_path, "g1")
         assert second.theirs.public_url == MOVED_THIEF_URL
-        assert cop.call_opponent("receive_turn", {**TURN, "step": 2})["ok"] is True
+        assert cop.call_opponent("receive_turn", {"message": {**TURN, "step": 2}})["ok"] is True
         assert net.delivered[-1] == (MOVED_THIEF_URL, "receive_turn")
 
     def test_without_the_re_handshake_the_old_address_is_dead(
@@ -181,7 +202,7 @@ class TestSurvivingATunnelRestartMidSeries:
         del net.hosts[THIEF_URL]
         net.listen(MOVED_THIEF_URL, thief)
         with pytest.raises(MatchAborted):
-            cop.call_opponent("receive_turn", TURN)
+            cop.call_opponent("receive_turn", {"message": TURN})
 
     def test_our_own_tunnel_moving_is_survivable_the_other_way_round(
         self, wired: tuple[Internet, Orchestrator, Orchestrator], tmp_path: Path
