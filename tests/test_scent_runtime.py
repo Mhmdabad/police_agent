@@ -136,6 +136,7 @@ class ScentedOpponent:
         return THEIR_START
 
     def send_commit(self, commitment: Commitment) -> None:
+        self.game_uid, self.sub_game = commitment.game_uid, commitment.sub_game
         self.commits.append(Commitment.from_dict(self._wire(commitment)))
         self.ceremony.at(commitment.step).receive(self.commits[-1])
 
@@ -146,12 +147,24 @@ class ScentedOpponent:
         self.fields[step] = self.scent.outgoing()
         self.state = replace(self.state, step=step)
         record = step_record(
-            self.state, self.role, "STAY", "truth", f"t{step}", scent=self.sealed(step)
+            self.state,
+            self.role,
+            "STAY",
+            "truth",
+            f"t{step}",
+            scent=self.sealed(step),
+            game_uid=self.game_uid,
+            sub_game=self.sub_game,
         )
         secret = nonce()
         self.nonces[step] = secret
         mine = Commitment(
-            step=step, sender=self.role, commit=commit_of(record, secret), timestamp=WHEN
+            step=step,
+            sender=self.role,
+            commit=commit_of(record, secret),
+            timestamp=WHEN,
+            game_uid=self.game_uid,
+            sub_game=self.sub_game,
         )
         self.ceremony.at(step).commit(mine, secret)
         return Commitment.from_dict(self._wire(mine))
@@ -195,6 +208,8 @@ class ScentedOpponent:
             hint=f"t{step}",
             timestamp=WHEN,
             scent=self.spoken(step),
+            game_uid=self.game_uid,
+            sub_game=self.sub_game,
         )
         self.ceremony.at(step).reveal(mine)
         return Reveal.from_dict(self._wire(mine))
@@ -378,7 +393,12 @@ class TestBeliefDrivesTheNextDecision:
 
         first_state, first = brain.calls[0]
         second_state, second = brain.calls[1]
-        assert first == {"target": (0, 1), "concentration": 0.0, "uncertainty": 1.0}
+        assert first == {
+            "target": (0, 1),
+            "concentration": 0.0,
+            "uncertainty": 1.0,
+        }
+        assert game.received_hints[1] == "t1"
         assert game.belief.at(OUR_START) == 0.0
         assert first["target"] != THEIR_START
         assert second["target"] == THEIR_START
@@ -386,6 +406,27 @@ class TestBeliefDrivesTheNextDecision:
         assert second["uncertainty"] == pytest.approx(1.0 - second["concentration"])  # type: ignore[operator]
         assert first_state.thief == first["target"]
         assert second_state.thief == second["target"]
+
+    def test_old_explicit_strategy_signature_remains_supported(self) -> None:
+        class ExplicitBrain(RecordingBrain):
+            def decide(  # type: ignore[override]
+                self,
+                state: BoardState,
+                *,
+                target: tuple[int, int],
+                concentration: float,
+                uncertainty: float,
+            ) -> Decision:
+                return super().decide(
+                    state,
+                    target=target,
+                    concentration=concentration,
+                    uncertainty=uncertainty,
+                )
+
+        game, _ = a_subgame(max_steps=2)
+        game.brain = ExplicitBrain(["STAY", "STAY"])  # type: ignore[assignment]
+        game.play()
 
     def test_malformed_scent_and_our_own_scent_cannot_poison_context(self) -> None:
         game, _ = a_subgame(ScentedOpponent(junk=True), moves=["STAY", "STAY"], max_steps=2)

@@ -107,6 +107,13 @@ class TestParsingWhatArrives:
     def test_it_survives_json(self) -> None:
         assert Commitment.from_dict(json.loads(json.dumps(commitment().to_dict()))) == commitment()
 
+    def test_unbound_legacy_commitment_fails_closed(self) -> None:
+        legacy = commitment().to_dict()
+        legacy.pop("game_uid")
+        legacy.pop("sub_game")
+        with pytest.raises(CeremonyError, match="game_uid"):
+            Commitment.from_dict(legacy)
+
     def test_extra_fields_are_dropped_rather_than_refused(self) -> None:
         """We cannot stop an opponent putting their move in the message.
 
