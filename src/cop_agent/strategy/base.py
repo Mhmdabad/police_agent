@@ -46,6 +46,10 @@ class NoLegalActionError(RuntimeError):
     """
 
 
+class StrategyContextError(TypeError):
+    """A configured brain cannot accept the documented belief context."""
+
+
 @dataclass
 class Decision:
     """One turn's output: what to do, and what to say about it."""
@@ -87,6 +91,10 @@ class BrainBase(ABC):
         The single entry point the runtime calls, positioned after hint decode
         and before Commit packing. Subclasses override the hooks below rather
         than this method, so the legality guard cannot be bypassed.
+
+        At runtime ``state.thief`` is the belief peak, not private truth, and
+        ``context`` contains stable ``target``, ``concentration``, and
+        ``uncertainty`` keys. Configured brains should accept ``**context``.
 
         Raises:
             NoLegalActionError: if nothing legal is available.

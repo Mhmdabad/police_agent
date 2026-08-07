@@ -82,6 +82,7 @@ class PoliceBrain(BrainBase):
         broken policy would be silently absorbed rather than reported.
         """
         goal = self.target(state, **context)
+        state = replace(state, thief=goal)
         logger.info("step %d seed=%d cop=%s target=%s", state.step, self.seed, state.cop, goal)
         win = winning_placement(state, self.axes, self.max_barriers)
         if win is not None:
@@ -97,25 +98,32 @@ class PoliceBrain(BrainBase):
     def concentration(self, **context: object) -> float:
         """How sharply belief is focused, in ``[0, 1]``.
 
-        One while the thief's position is known exactly, which is the blind
-        stage's premise. The belief map will supply the real figure; until it
-        does, claiming certainty is honest rather than optimistic, because the
-        certainty is real.
+        Runtime supplies the real figure. A direct caller that omits it gets
+        zero, matching the deterministic uninformative prior used by
+        :meth:`target` rather than inventing certainty.
         """
         supplied = context.get("concentration")
-        return float(supplied) if isinstance(supplied, int | float) else 1.0
+        return float(supplied) if isinstance(supplied, int | float) else 0.0
 
     def target(self, state: BoardState, **context: object) -> Position:
         """The cell to pursue.
 
-        Until the belief map exists this is the thief's actual position, which
-        is the "blind" stage the build order calls for: prove the decision core
-        is right under full information before adding uncertainty on top.
+        Runtime supplies the belief peak. Direct callers that omit it receive a
+        deterministic uniform-prior choice derived only from board geometry;
+        exact opponent truth is never a fallback.
         """
         supplied = context.get("target")
         if isinstance(supplied, tuple) and len(supplied) == 2:
             return (int(supplied[0]), int(supplied[1]))
-        return state.thief
+        candidates = [
+            (row, col)
+            for row in range(state.grid_size)
+            for col in range(state.grid_size)
+            if (row, col) != state.cop and state.is_free((row, col))
+        ]
+        if not candidates:
+            raise NoLegalActionError("belief prior has no possible thief cell")
+        return candidates[0]
 
     def _pick_move(self, state: BoardState, **context: object) -> Move:
         """The legal move that gets closest to the target.

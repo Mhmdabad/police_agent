@@ -85,9 +85,9 @@ class TestNeverIllegal:
                 continue
             if not legal_moves(state, "cop", AXES):
                 with pytest.raises(NoLegalActionError):
-                    PoliceBrain(axes=AXES).decide(state)
+                    PoliceBrain(axes=AXES).decide(state, target=state.thief)
                 continue
-            action = PoliceBrain(axes=AXES).decide(state).action
+            action = PoliceBrain(axes=AXES).decide(state, target=state.thief).action
             if isinstance(action, PlaceBarrier):
                 assert action.at in placement_range(state, AXES)
                 assert not state.is_barrier(action.at)
@@ -122,7 +122,9 @@ class TestSelfWallOffRegression:
         assert ranked[(0, 1)].disconnects
         assert ranked[(0, 1)].escape_reduction > ranked[(0, 0)].escape_reduction
         assert (0, 1) not in {score.at for score in safe_placements(state, AXES, (2, 2))}
-        assert PoliceBrain(axes=AXES).decide(state).action != PlaceBarrier((0, 1))
+        assert PoliceBrain(axes=AXES).decide(state, target=state.thief).action != PlaceBarrier(
+            (0, 1)
+        )
 
     def test_a_placement_leaving_no_legal_move_is_refused(self) -> None:
         """The more expensive half. An unanswered turn is a technical loss,
@@ -131,7 +133,7 @@ class TestSelfWallOffRegression:
         assert legal_moves(state, "cop", AXES) == ["STAY"]
         only = rank_placements(state, AXES, (2, 2))[0]
         assert only.at == (0, 0) and only.immobilises
-        action = PoliceBrain(axes=AXES).decide(state).action
+        action = PoliceBrain(axes=AXES).decide(state, target=state.thief).action
         assert isinstance(action, MoveAction)
 
     def test_the_cop_never_walls_itself_in_over_a_whole_match(self) -> None:
@@ -143,7 +145,7 @@ class TestSelfWallOffRegression:
             if evaluate(state, AXES) is not Outcome.ONGOING:
                 break
             assert legal_moves(state, "cop", AXES), f"cop immobilised at step {step}"
-            state = apply_action(state, "cop", brain.decide(state).action, AXES)
+            state = apply_action(state, "cop", brain.decide(state, target=state.thief).action, AXES)
             state = evade(replace(state, step=step + 1))
         assert legal_moves(state, "cop", AXES)
 
@@ -164,7 +166,7 @@ class TestQuotaNeverExceeded:
         for step in range(35):
             if evaluate(state, AXES) is not Outcome.ONGOING:
                 break
-            state = apply_action(state, "cop", brain.decide(state).action, AXES)
+            state = apply_action(state, "cop", brain.decide(state, target=state.thief).action, AXES)
             state = evade(replace(state, step=step + 1))
             turns += 1
             assert state.barriers_used <= DEFAULT_MAX_BARRIERS
@@ -183,7 +185,7 @@ class TestQuotaNeverExceeded:
         for step in range(35):
             if evaluate(state, AXES) is not Outcome.ONGOING:
                 break
-            action = brain.decide(state).action
+            action = brain.decide(state, target=state.thief).action
             placements += isinstance(action, PlaceBarrier)
             state = apply_action(state, "cop", action, AXES)
             state = evade(replace(state, step=step + 1))
@@ -215,7 +217,11 @@ class TestQuotaNeverExceeded:
                 if not options:
                     break
                 state = apply_action(
-                    state, "cop", MoveAction(brain._pick_move(state)), AXES, max_barriers=limit
+                    state,
+                    "cop",
+                    MoveAction(brain._pick_move(state, target=state.thief)),
+                    AXES,
+                    max_barriers=limit,
                 )
             assert placed > 0, f"limit {limit} never placed anything"
             assert state.barriers_used <= limit
@@ -236,7 +242,9 @@ class TestQuotaNeverExceeded:
             assert state.barriers_used <= DEFAULT_MAX_BARRIERS - RESERVE
             if not legal_moves(state, "cop", AXES):
                 break
-            state = apply_action(state, "cop", MoveAction(brain._pick_move(state)), AXES)
+            state = apply_action(
+                state, "cop", MoveAction(brain._pick_move(state, target=state.thief)), AXES
+            )
         assert state.barriers_used == DEFAULT_MAX_BARRIERS - RESERVE
 
     def test_placement_stops_rather_than_erroring_when_the_quota_runs_out(self) -> None:
@@ -244,7 +252,7 @@ class TestQuotaNeverExceeded:
         state = make(cop=(2, 1), thief=(2, 5), barriers=walls)
         spent = PoliceBrain(axes=AXES, max_barriers=7)
         assert state.barriers_used == 7
-        action = spent.decide(state).action
+        action = spent.decide(state, target=state.thief).action
         assert isinstance(action, MoveAction)
 
 
@@ -254,8 +262,8 @@ class TestDeterminismCriterion:
     def test_same_state_and_config_yields_the_same_action(self) -> None:
         state = make(cop=(2, 2), thief=(5, 5))
         assert (
-            PoliceBrain(axes=AXES, seed=7).decide(state).action
-            == PoliceBrain(axes=AXES, seed=7).decide(state).action
+            PoliceBrain(axes=AXES, seed=7).decide(state, target=state.thief).action
+            == PoliceBrain(axes=AXES, seed=7).decide(state, target=state.thief).action
         )
 
     def test_a_whole_match_replays_move_for_move(self) -> None:
@@ -266,7 +274,7 @@ class TestDeterminismCriterion:
             for step in range(20):
                 if evaluate(state, AXES) is not Outcome.ONGOING:
                     break
-                action = brain.decide(state).action
+                action = brain.decide(state, target=state.thief).action
                 actions.append(action)
                 state = apply_action(state, "cop", action, AXES)
                 state = evade(replace(state, step=step + 1))

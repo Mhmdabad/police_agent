@@ -53,14 +53,16 @@ class TestManhattan:
 class TestPursuit:
     def test_closes_distance_from_the_corner(self) -> None:
         brain = PoliceBrain(axes=AXES)
-        move = brain.decide(make()).action
+        state = make()
+        move = brain.decide(state, target=state.thief).action
         assert isinstance(move, MoveAction)
         assert move.move in {"S", "E"}
 
     def test_the_rulebook_worked_example(self) -> None:
         """Cop (2,2) chasing (5,5): east or south both reduce D to 5."""
         brain = PoliceBrain(axes=AXES)
-        action = brain.decide(make(cop=(2, 2), thief=(5, 5))).action
+        state = make(cop=(2, 2), thief=(5, 5))
+        action = brain.decide(state, target=state.thief).action
         assert isinstance(action, MoveAction)
         assert action.move in {"S", "E"}
 
@@ -80,7 +82,7 @@ class TestPursuit:
                 if is_capture_by_overlap(state):
                     continue  # already won; decide() is not defined for a finished position
                 before = manhattan(state.cop, state.thief)
-                action = brain.decide(state).action
+                action = brain.decide(state, target=state.thief).action
                 win = winning_placement(state, AXES)
                 if win is not None:
                     assert action == PlaceBarrier(win)
@@ -135,7 +137,8 @@ class TestLegalityGuard:
                 return "N"
 
         with pytest.raises(NoLegalActionError, match="not among"):
-            Rogue(axes=AXES).decide(make(cop=(0, 0)))
+            state = make(cop=(0, 0))
+            Rogue(axes=AXES).decide(state, target=state.thief)
 
     def test_the_base_default_relocates(self) -> None:
         """PoliceBrain overrides _decide_move to weigh barriers, so the base
@@ -344,14 +347,15 @@ class TestContainmentTieBreak:
         """Containment breaks ties; it does not override closing in."""
         brain = PoliceBrain(axes=AXES)
         state = make(cop=(0, 0), thief=(0, 6))
-        action = brain.decide(state).action
+        action = brain.decide(state, target=state.thief).action
         assert isinstance(action, MoveAction)
         assert action.move == "E"
 
     def test_a_tie_is_broken_not_left_to_position(self) -> None:
         """Cop (2,2) to (5,5): S and E both reach D=5, so something must choose."""
         brain = PoliceBrain(axes=AXES)
-        action = brain.decide(make(cop=(2, 2), thief=(5, 5))).action
+        state = make(cop=(2, 2), thief=(5, 5))
+        action = brain.decide(state, target=state.thief).action
         assert isinstance(action, MoveAction)
         assert action.move in {"S", "E"}
 
@@ -359,7 +363,7 @@ class TestContainmentTieBreak:
         """A step that seals a region beats one that merely closes distance."""
         walls = frozenset({(0, 2), (1, 2), (3, 2), (4, 2), (5, 2), (6, 2)})
         state = make(cop=(2, 1), thief=(2, 5), barriers=walls)
-        assert PoliceBrain(axes=AXES)._pick_move(state) == "E"
+        assert PoliceBrain(axes=AXES)._pick_move(state, target=state.thief) == "E"
 
     def test_but_a_barrier_on_the_corridor_beats_the_step(self) -> None:
         """The same position, once #46 lets the two be compared.
@@ -378,7 +382,9 @@ class TestContainmentTieBreak:
         assert call.placement.at == (2, 1)
         assert (call.placement_value, call.move_gain) == (14, 1)
         assert call.place
-        assert PoliceBrain(axes=AXES).decide(state).action == PlaceBarrier((2, 1))
+        assert PoliceBrain(axes=AXES).decide(state, target=state.thief).action == PlaceBarrier(
+            (2, 1)
+        )
 
     def test_edge_pressure_prefers_a_cornered_target(self) -> None:
         brain = PoliceBrain(axes=AXES)
