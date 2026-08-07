@@ -282,7 +282,7 @@ may not change at all; *negotiable* parameters are free. Any deviation from a
   },
   "network_and_league": {
     "response_timeout_sec": 30, "watchdog_timeout_sec": 60,
-    "num_games": 1, "diversity_reward": 10,
+    "num_games": 6, "diversity_reward": 10,
     "min_games_to_pass": 2, "max_games_per_team": 10,
     "token_budget_per_series": 200000
   },
@@ -293,9 +293,10 @@ may not change at all; *negotiable* parameters are free. Any deviation from a
 }
 ```
 
-A full league series against one opponent is **6 sub-games**; `num_games: 1` is the
-single-sub-game demo default. Each config file must be **named per match** and
-committed to this repo so any match is reproducible.
+A full league series against one opponent is **6 sub-games**, and Appendix F
+table 18 row 1 marks that **fixed** — deviating disqualifies the team, so there
+is no demo-sized default to fall back to. Each config file must be **named per
+match** and committed to this repo so any match is reproducible.
 
 ---
 
