@@ -37,7 +37,7 @@ from cop_agent.shared.config import (
 )
 from cop_agent.shared.terms import to_terms
 from test_localhost_match import REPOS, parameters
-from test_match import a_runner, an_outcome
+from test_match import a_runner, an_outcome, stub_boundaries
 
 REPO = Path(__file__).resolve().parent.parent
 BOOK_SERIES = 6
@@ -327,8 +327,10 @@ class TestTheRunnerPlaysExactlySixNumberedSubGames:
             "play_sub_game",
             lambda self, number, timeout=30.0: played.append(number),
         )
+        crossed = stub_boundaries(monkeypatch)
         a_runner(tmp_path).play_series()
         assert played == [1, 2, 3, 4, 5, 6]
+        assert crossed == [2, 3, 4, 5, 6], "six sub-games are separated by five boundaries"
 
     def test_a_runner_on_deviating_parameters_plays_nothing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -47,6 +47,7 @@ from test_localhost_match import (  # noqa: E402
     parameters,
     wait_for,
 )
+from test_match import a_peering  # noqa: E402
 
 GAME_UID = "u-0001"
 """The series these tests negotiate. Matches the declaration they build."""
@@ -214,6 +215,7 @@ def a_runner(side: Side, config: dict[str, Any], directory: Path) -> MatchRunner
         max_steps=3,
         directory=directory,
         now=lambda: WHEN,
+        peering=a_peering(side.role),
     )
 
 
