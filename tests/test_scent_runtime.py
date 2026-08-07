@@ -382,9 +382,8 @@ class TestBeliefDrivesTheNextDecision:
             "target": (0, 1),
             "concentration": 0.0,
             "uncertainty": 1.0,
-            "opponent_hint": None,
         }
-        assert second["opponent_hint"] == "t1"
+        assert game.received_hints[1] == "t1"
         assert game.belief.at(OUR_START) == 0.0
         assert first["target"] != THEIR_START
         assert second["target"] == THEIR_START
@@ -392,6 +391,27 @@ class TestBeliefDrivesTheNextDecision:
         assert second["uncertainty"] == pytest.approx(1.0 - second["concentration"])  # type: ignore[operator]
         assert first_state.thief == first["target"]
         assert second_state.thief == second["target"]
+
+    def test_old_explicit_strategy_signature_remains_supported(self) -> None:
+        class ExplicitBrain(RecordingBrain):
+            def decide(  # type: ignore[override]
+                self,
+                state: BoardState,
+                *,
+                target: tuple[int, int],
+                concentration: float,
+                uncertainty: float,
+            ) -> Decision:
+                return super().decide(
+                    state,
+                    target=target,
+                    concentration=concentration,
+                    uncertainty=uncertainty,
+                )
+
+        game, _ = a_subgame(max_steps=2)
+        game.brain = ExplicitBrain(["STAY", "STAY"])  # type: ignore[assignment]
+        game.play()
 
     def test_malformed_scent_and_our_own_scent_cannot_poison_context(self) -> None:
         game, _ = a_subgame(ScentedOpponent(junk=True), moves=["STAY", "STAY"], max_steps=2)
