@@ -316,7 +316,7 @@ class TestOnlyTheOpponentsFieldIsAbsorbed:
 
     def test_a_field_we_cannot_verify_is_not_absorbed(self) -> None:
         """Fail-closed: no scent beats scent we cannot check."""
-        game, _ = a_subgame(ScentedOpponent(junk=True))
+        game, _ = a_subgame(ScentedOpponent(junk=True), moves=["STAY"])
         game.play()
         assert game.scent.opponent.values == {}
 
@@ -354,7 +354,7 @@ class TestTheBeliefMapMoves:
 
     def test_an_unverifiable_field_leaves_the_belief_alone(self) -> None:
         """A malformed field must not become evidence by being loud."""
-        game, _ = a_subgame(ScentedOpponent(junk=True))
+        game, _ = a_subgame(ScentedOpponent(junk=True), moves=["STAY"])
         before = game.belief.heatmap()
         game.play()
         assert game.belief.heatmap() == before
@@ -378,7 +378,8 @@ class TestBeliefDrivesTheNextDecision:
 
         first_state, first = brain.calls[0]
         second_state, second = brain.calls[1]
-        assert first == {"target": (0, 0), "concentration": 0.0, "uncertainty": 1.0}
+        assert first == {"target": (0, 1), "concentration": 0.0, "uncertainty": 1.0}
+        assert game.belief.at(OUR_START) == 0.0
         assert first["target"] != THEIR_START
         assert second["target"] == THEIR_START
         assert second["concentration"] > 0.0  # type: ignore[operator]
@@ -391,8 +392,19 @@ class TestBeliefDrivesTheNextDecision:
         brain = RecordingBrain(["STAY", "STAY"])
         game.brain = brain  # type: ignore[assignment]
         game.play()
-        assert [call[1]["target"] for call in brain.calls] == [(0, 0), (0, 0)]
+        assert [call[1]["target"] for call in brain.calls] == [(0, 1), (0, 1)]
         assert all(call[1]["concentration"] == 0.0 for call in brain.calls)
+
+    def test_physically_forged_step_one_cannot_redirect_step_two(self) -> None:
+        game, _ = a_subgame(ScentedOpponent(forge_at=1), max_steps=2)
+        brain = RecordingBrain(["STAY", "STAY"])
+        game.brain = brain  # type: ignore[assignment]
+
+        played = game.play()
+
+        assert brain.calls[1][1]["target"] == (0, 1)
+        assert not played.audit.clean
+        assert any("step 1" in failure for failure in played.audit.failures)
 
     def test_barriers_and_zero_mass_are_never_selected(self) -> None:
         game, _ = a_subgame(max_steps=1)

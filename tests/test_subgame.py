@@ -13,7 +13,7 @@ from typing import Any, Protocol
 
 import pytest
 
-from cop_agent.domain.actions import MoveAction, PlaceBarrier
+from cop_agent.domain.actions import MoveAction, PlaceBarrier, apply_action
 from cop_agent.domain.axes import AxisConvention
 from cop_agent.domain.board import BoardState
 from cop_agent.domain.crypto import commit_of, nonce, step_record
@@ -108,6 +108,12 @@ class StandInOpponent:
     def send_reveal(self, opened: Reveal) -> None:
         self.seen.append("reveal")
         self.ceremony.at(opened.step).receive_reveal(Reveal.from_dict(self._wire(opened)))
+        action = (
+            PlaceBarrier(at=(opened.barrier_placed[0], opened.barrier_placed[1]))
+            if opened.barrier_placed
+            else MoveAction(move=opened.move)  # type: ignore[arg-type]
+        )
+        self.state = apply_action(self.state, "cop", action, AXES)
 
     def await_reveal(self, step: int) -> Reveal:
         spoken = "N" if step == self.corrupt_at else self.move
