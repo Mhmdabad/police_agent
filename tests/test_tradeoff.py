@@ -130,10 +130,12 @@ class TestOpenBoardRefusesByDefault:
         """The intended reading: barriers are for corridors and corners."""
         for cop in ((0, 0), (1, 1), (2, 2), (3, 4), (5, 1)):
             state = board(cop=cop, thief=(3, 3))
-            assert not weigh(state, AXES, (3, 3), PoliceBrain(axes=AXES)._pick_move(state)).place
+            move = PoliceBrain(axes=AXES)._pick_move(state, target=state.thief)
+            assert not weigh(state, AXES, (3, 3), move).place
 
     def test_so_the_cop_moves(self) -> None:
-        action = PoliceBrain(axes=AXES).decide(board(cop=(0, 0), thief=(3, 3))).action
+        state = board(cop=(0, 0), thief=(3, 3))
+        action = PoliceBrain(axes=AXES).decide(state, target=state.thief).action
         assert isinstance(action, MoveAction)
 
 
@@ -143,7 +145,9 @@ class TestTheBrainWiresItTogether:
         walls = {(6, col) for col in range(7)} | {(5, col) for col in range(5)}
         state = board(cop=(3, 3), thief=(3, 4), barriers=walls)
         assert Budget(used=state.barriers_used).spendable == 0
-        assert PoliceBrain(axes=AXES).decide(state).action == PlaceBarrier((3, 4))
+        assert PoliceBrain(axes=AXES).decide(state, target=state.thief).action == PlaceBarrier(
+            (3, 4)
+        )
 
     def test_an_illegal_move_is_caught_before_it_is_weighed(self) -> None:
         """Otherwise the comparison consumes a distance to a cell that is not
@@ -155,16 +159,17 @@ class TestTheBrainWiresItTogether:
                 return "N"
 
         with pytest.raises(Exception, match="not among"):
-            Rogue(axes=AXES).decide(board(cop=(0, 0), thief=(3, 3)))
+            state = board(cop=(0, 0), thief=(3, 3))
+            Rogue(axes=AXES).decide(state, target=state.thief)
 
-    def test_concentration_defaults_to_certainty_in_the_blind_stage(self) -> None:
-        assert PoliceBrain(axes=AXES).concentration() == 1.0
+    def test_concentration_defaults_to_the_uninformative_prior(self) -> None:
+        assert PoliceBrain(axes=AXES).concentration() == 0.0
 
     def test_a_supplied_concentration_is_used(self) -> None:
         assert PoliceBrain(axes=AXES).concentration(concentration=0.25) == 0.25
 
     def test_a_nonsense_concentration_falls_back_rather_than_crashing(self) -> None:
-        assert PoliceBrain(axes=AXES).concentration(concentration="soon") == 1.0
+        assert PoliceBrain(axes=AXES).concentration(concentration="soon") == 0.0
 
 
 class TestTheNegotiatedQuotaIsHonoured:
@@ -186,8 +191,10 @@ class TestTheNegotiatedQuotaIsHonoured:
 
     def test_the_brain_falls_through_to_moving(self) -> None:
         state = board(cop=(2, 1), thief=(2, 5), barriers=CORRIDOR)
-        assert isinstance(PoliceBrain(axes=AXES).decide(state).action, PlaceBarrier)
-        spent = PoliceBrain(axes=AXES, max_barriers=6).decide(state).action
+        assert isinstance(
+            PoliceBrain(axes=AXES).decide(state, target=state.thief).action, PlaceBarrier
+        )
+        spent = PoliceBrain(axes=AXES, max_barriers=6).decide(state, target=state.thief).action
         assert isinstance(spent, MoveAction)
 
     def test_a_raised_quota_is_spendable_once_it_clears_the_reserve(self) -> None:
@@ -205,5 +212,10 @@ class TestTheNegotiatedQuotaIsHonoured:
     def test_a_win_respects_it_too(self) -> None:
         walls = frozenset({(6, col) for col in range(7)})
         state = board(cop=(3, 3), thief=(3, 4), barriers=walls)
-        assert PoliceBrain(axes=AXES).decide(state).action == PlaceBarrier((3, 4))
-        assert isinstance(PoliceBrain(axes=AXES, max_barriers=7).decide(state).action, MoveAction)
+        assert PoliceBrain(axes=AXES).decide(state, target=state.thief).action == PlaceBarrier(
+            (3, 4)
+        )
+        assert isinstance(
+            PoliceBrain(axes=AXES, max_barriers=7).decide(state, target=state.thief).action,
+            MoveAction,
+        )
