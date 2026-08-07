@@ -378,7 +378,13 @@ class TestBeliefDrivesTheNextDecision:
 
         first_state, first = brain.calls[0]
         second_state, second = brain.calls[1]
-        assert first == {"target": (0, 1), "concentration": 0.0, "uncertainty": 1.0}
+        assert first == {
+            "target": (0, 1),
+            "concentration": 0.0,
+            "uncertainty": 1.0,
+            "opponent_hint": None,
+        }
+        assert second["opponent_hint"] == "t1"
         assert game.belief.at(OUR_START) == 0.0
         assert first["target"] != THEIR_START
         assert second["target"] == THEIR_START

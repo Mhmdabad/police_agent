@@ -101,7 +101,18 @@ class BrainBase(ABC):
         """
         action = self._decide_move(state, **context)
         self._guard(state, action)
-        return Decision(action=action)
+        return Decision(action=action, hint=self._hint(state, action, **context))
+
+    def _hint(self, state: BoardState, action: Action, **context: object) -> str:
+        """Supply one deterministic safe verbal hint for this accepted turn.
+
+        Custom brains may override this hook, or override :meth:`decide` and
+        return a complete :class:`Decision`.  The default remains deliberately
+        vague: it is valid for moves, barriers, and ``STAY`` and discloses no
+        coordinate or future action.
+        """
+        del state, action, context
+        return "I am watching the streets"
 
     def _decide_move(self, state: BoardState, **context: object) -> Action:
         """Choose between relocating and any role-specific alternative.
