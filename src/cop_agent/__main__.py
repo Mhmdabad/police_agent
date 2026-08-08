@@ -1,34 +1,3 @@
-"""``python -m cop_agent`` — start this peer and keep it answering.
-
-The entry point the project has never had. It does the smallest honest amount:
-read the private config, build the server, say where we are, and serve until
-something stops it.
-
-**Starting the server is the whole job of this command.** Playing a match needs
-an opponent to have started theirs, a negotiated config, and an agreed game id —
-none of which this process can decide alone, and all of which arrive through the
-tools the server exposes. A command that tried to do both would have to guess at
-the half it does not control, and the guess would be wrong exactly when a real
-opponent behaved slightly differently from the one we imagined.
-
-So: ``serve`` runs the peer and answers. ``check`` answers "would this work?"
-without binding anything, which is the question somebody actually has five
-minutes before a match. ``play`` is the other half — it starts the server *and*
-opens a match against an opponent who has already started theirs.
-
-``play`` writes the four artefacts and stops. **It does not send anything.**
-FR-7.16 requires both sides to agree the result before either reports, so the
-report is written to disk with ``agreed`` false and mailing it is a separate,
-later, human act.
-
-**It prints where it is reachable, and says plainly when that is nowhere.**
-Advertising a loopback address to another team is not a small mistake — every
-call times out, the deadline tracker turns that into a technical loss, and a
-technical loss scores zero for *both* sides. The check runs before the socket
-opens, so the failure is a line on our own terminal rather than a mystery in
-somebody else's match.
-"""
-
 import argparse
 import json
 import sys
@@ -36,36 +5,19 @@ import tomllib
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
-
 from .infra.inboxes import TOOL_NAMES, PeerInboxes
 from .infra.mcp_client import ClientSettings
 from .infra.mcp_server import SERVER_NAME, ServerSettings, build, serve
 from .infra.tunnel import NotPublicError, discover, read_ngrok_api
 from .shared.config import SHARED_CONFIG, series_length
 from .shared.config import load as load_shared
-
 PACKAGE = "cop_agent"
 ROLE = "police"
 CONFIG = Path("config/police/game.toml")
-
-
 _DEFAULT: Any = object()
-"""Stands in for "use the real ngrok probe", resolved at call time.
-
-``reader = read_ngrok_api`` would bind the default **once, at import**, so
-substituting the module attribute afterwards would change nothing — the exact
-defect that made the authorize suite open a real browser and hang (#280). A
-sentinel keeps the resolution where a test can reach it, and ``None`` stays
-available as a meaningful value: *do not probe at all*.
-"""
-
-
 class StartupError(RuntimeError):
-    """Raised when this peer cannot honestly start."""
-
-
+    pass
 def load_private(path: Path) -> dict[str, Any]:
-    """Read the private per-peer TOML, or say which file is missing."""
     try:
         body: dict[str, Any] = tomllib.loads(path.read_text())
     except FileNotFoundError as exc:
@@ -77,28 +29,7 @@ def load_private(path: Path) -> dict[str, Any]:
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise StartupError(f"cannot read {path}: {exc}") from exc
     return body
-
-
 def resolve_series_length(requested: int | None, path: Path) -> int:
-    """How many sub-games this peer will play, from the file both peers sign.
-
-    Read here — before the server thread, before the announcement, before any
-    address reaches an opponent — because a series of the wrong length is not a
-    badly played match, it is a disqualified one (Appendix F table 18 row 1,
-    status *fixed*). The cheapest place to learn that is our own terminal, and
-    the most expensive is the opponent's audit after six sub-games that were
-    only ever going to be one.
-
-    Args:
-        requested: the value typed after ``--sub-games``, or ``None`` for the
-            book length. Any other number is refused rather than honoured; the
-            flag exists so that somebody who deviates on purpose is told the
-            rule, not so that the deviation is available.
-
-    Raises:
-        StartupError: if the shared configuration cannot be read at all.
-        ConfigError: if it deviates, or if ``requested`` does.
-    """
     try:
         config = load_shared(path)
     except OSError as exc:
@@ -110,23 +41,9 @@ def resolve_series_length(requested: int | None, path: Path) -> int:
     except json.JSONDecodeError as exc:
         raise StartupError(f"{path} is not valid JSON: {exc}") from exc
     return series_length(config, requested)
-
-
 def where_we_are(
     environ: dict[str, str], reader: Callable[[], str | bytes] | None = _DEFAULT
 ) -> str:
-    """The address to advertise, or a sentence explaining that there is none.
-
-    ``reader`` is the ngrok probe, exposed so a test can be hermetic. Without
-    it these checks pass or fail depending on whether the developer happens to
-    have a tunnel running — which is a test that reports the machine rather
-    than the code.
-
-    A missing tunnel is not an error — localhost is explicitly permitted while
-    developing, and refusing to start without one would make every local run
-    conditional on ngrok. A *malformed* one is an error, because it means
-    somebody set an address and got it wrong, which is worse than not setting it.
-    """
     try:
         endpoint = discover(environ, read_ngrok_api if reader is _DEFAULT else reader)
     except NotPublicError as exc:
@@ -134,10 +51,7 @@ def where_we_are(
     if endpoint is None:
         return "not publicly reachable — fine for local play, not for a league match"
     return endpoint.url
-
-
 def describe(private: dict[str, Any], environ: dict[str, str]) -> list[str]:
-    """Everything worth printing before a socket opens, in order of usefulness."""
     network = private.get("network", {})
     server = ServerSettings.from_config(network)
     client = ClientSettings.from_config(network, environ)
@@ -148,10 +62,7 @@ def describe(private: dict[str, Any], environ: dict[str, str]) -> list[str]:
         f"  opponent at    {client.opponent_url}",
         f"  tools          {', '.join(sorted(TOOL_NAMES))}",
     ]
-
-
 def main(argv: Sequence[str] | None = None, environ: dict[str, str] | None = None) -> int:
-    """Run the command. Returns an exit code rather than raising."""
     parser = argparse.ArgumentParser(prog=f"python -m {PACKAGE}", description=__doc__)
     parser.add_argument(
         "command",
@@ -181,11 +92,8 @@ def main(argv: Sequence[str] | None = None, environ: dict[str, str] | None = Non
         "never against another team",
     )
     arguments = parser.parse_args(argv)
-
     import os  # noqa: PLC0415 - read once, here, so tests can supply their own
-
     source = dict(os.environ) if environ is None else environ
-
     try:
         private = load_private(arguments.config)
         for line in describe(private, source):
@@ -200,34 +108,17 @@ def main(argv: Sequence[str] | None = None, environ: dict[str, str] | None = Non
     except (StartupError, ValueError) as exc:
         print(f"cannot start: {exc}", file=sys.stderr)
         return 1
-
     inboxes = PeerInboxes()
     if arguments.command == "play":
         return play(arguments, private, settings, inboxes, source)
-
     print("serving — stop with Ctrl-C", flush=True)
     serve(build(inboxes), settings)
     return 0
-
-
 def require_playable(
     arguments: argparse.Namespace,
     environ: dict[str, str],
     reader: Callable[[], str | bytes] | None = _DEFAULT,
 ) -> None:
-    """Refuse to open a match that cannot succeed, before anything is announced.
-
-    ``serve`` is happy without a tunnel — local development is the normal case
-    and refusing would make every test run conditional on ngrok. ``play`` is
-    not: it *announces our address to an opponent*, and announcing nothing (or
-    a loopback) means every call they make times out, the deadline tracker
-    turns that into a technical loss, and a technical loss scores zero for
-    **both** sides.
-
-    Checked here rather than in the handshake because the handshake's own
-    complaint is ``'' must use one of ['https', 'http']`` — true, and no use at
-    all to somebody who has simply not started a tunnel.
-    """
     if not arguments.game_id:
         raise StartupError(
             "play needs --game-id, agreed with the opponent before either side "
@@ -243,125 +134,15 @@ def require_playable(
             "they make times out — and a technical loss scores zero for both sides, "
             "not just for us. Use `check` to confirm before you try again"
         )
-
-
-def safely_describe(exc: BaseException) -> str:
-    """:func:`describe_failure`, but incapable of replacing a failure with its own.
-
-    A reporter that raises turns a diagnosable problem into an unrelated
-    traceback and loses the original entirely. That happened once here, so the
-    call is wrapped: whatever goes wrong inside, the caller still gets the
-    ``repr`` it would have had anyway.
-    """
-    try:
-        return describe_failure(exc)
-    except Exception as broke:  # noqa: BLE001 - a broken reporter must still report
-        return f"{exc!r} (the failure description itself failed: {broke!r})"
-
-
-def describe_failure(exc: BaseException) -> str:
-    """Say what went wrong, even when the exception itself says nothing.
-
-    ``f"{exc}"`` is empty for a surprising number of real failures, and a match
-    that ends with ``the match did not finish:`` and nothing after the colon is
-    worse than a traceback — it reports that something happened and withholds
-    every fact about it. That is not hypothetical: it is how the sixth live
-    warm-up ended, after the run had played most of a sub-game.
-
-    Three shapes get in the way and each is unwrapped here:
-
-    * **Exception groups.** ``anyio`` and the MCP client raise them, and the
-      group's own message is often blank while the exceptions inside it are the
-      whole story.
-    * **Multi-argument exceptions.** ``MatchAborted(TechnicalLoss.TIMEOUT, why)``
-      renders as a bare tuple with an enum ``repr`` in it. Joining the arguments
-      says the same thing in words.
-    * **Genuinely silent exceptions.** Some carry no message at all; then the
-      class name and the cause are all there is, so both are printed rather
-      than an empty string.
-
-    **The walk is guarded, because the graph is not a tree.** A group can hold
-    an exception whose ``__context__`` is the group, and ``anyio`` re-raising
-    across task boundaries produces exactly that. The first version of this
-    function had no guard and recursed until the interpreter gave up — so a
-    helper written to stop a run from failing silently instead made it fail
-    loudly, in the error handler, taking the traceback with it. Diagnostics
-    must not be able to do that, so cycles and depth are both bounded.
-    """
-    return _describe(exc, set(), 0)
-
-
-MAX_DEPTH = 8
-"""How far down a cause chain to walk. Deeper is noise, not diagnosis."""
-
-
-def _describe(exc: BaseException, seen: set[int], depth: int) -> str:
-    """One node of the walk. ``seen`` holds ids, because exceptions are unhashable-ish.
-
-    Identity rather than equality: two distinct exceptions can compare equal,
-    and collapsing them would hide one of them.
-    """
-    if id(exc) in seen or depth > MAX_DEPTH:
-        return type(exc).__name__
-    seen.add(id(exc))
-
-    inner = getattr(exc, "exceptions", None)
-    if isinstance(inner, (list, tuple)) and inner:
-        parts = [_describe(one, seen, depth + 1) for one in inner]
-        return "; ".join(dict.fromkeys(parts))
-
-    said = "; ".join(part for part in (str(a).strip() for a in exc.args) if part)
-    if not said:
-        said = str(exc).strip()
-    label = type(exc).__name__
-    if said:
-        return said if label in said else f"{said} ({label})"
-
-    because = exc.__cause__ or exc.__context__
-    if because is not None:
-        return f"{label}, which carried no message; caused by {_describe(because, seen, depth + 1)}"
-    return f"{label} with no message — nothing recorded why, which is itself the bug"
-
-
-def play(
-    arguments: argparse.Namespace,
-    private: dict[str, Any],
-    settings: ServerSettings,
-    inboxes: PeerInboxes,
-    environ: dict[str, str],
-) -> int:  # pragma: no cover - drives a live opponent
-    """Serve, then open a match. Writes artefacts; sends nothing.
-
-    Not covered by tests, and the reason is the same one that keeps
-    ``run_live`` uncovered: the thing under test would be *another team*.
-    Everything it composes — the handshake, the digest exchange, the ceremony,
-    the audit, the artefact set — is covered against a real opponent in
-    ``test_localhost_match``. This function is the part that cannot be.
-    """
-    import threading
-
-    from .runtime.driver import open_match
-
-    threading.Thread(target=serve, args=(build(inboxes), settings), daemon=True).start()
-    print(f"serving on {settings.host}:{settings.port}", flush=True)
-    try:
-        written = open_match(
-            inboxes=inboxes,
-            private=private,
-            environ=environ,
-            game_id=arguments.game_id,
-            directory=arguments.out,
-            rehearsal=arguments.rehearse,
-        )
-    except Exception as exc:  # noqa: BLE001 - a match failure is a message, not a traceback
-        print(f"the match did not finish: {safely_describe(exc)}", file=sys.stderr)
-        return 1
-    for path in written:
-        print(f"  wrote {path}")
-    print("\nNothing has been emailed. Agree the result with the opponent first,")
-    print("then send it deliberately — FR-7.16.")
-    return 0
-
-
+from ._main_commands import (
+    _install as _install_main_commands,
+)
+from ._main_commands import (
+    MAX_DEPTH,
+    describe_failure,
+    play,
+    safely_describe,
+)
+_install_main_commands(globals())
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())

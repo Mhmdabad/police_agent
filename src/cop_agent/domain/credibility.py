@@ -1,32 +1,6 @@
 """Catching a lie by checking it against the trail.
 
-The rulebook's worked example (PDF p. 47) is the whole mechanism in one
-paragraph. The thief announces "I moved north". Had that been true, the cop
-would expect a fresh trace in the north of roughly
-
-    (1 - rho) * 0.9 = 0.81
-
-Instead it measures 0.00 there, while the entire scent mass sits at the
-opposite pole of the board. The cop concludes, with high confidence, that the
-thief is lying: it lowers the trust it assigns to verbal claims, re-weights
-its probability matrix toward the south-east, and re-aims pursuit at the real
-source rather than the declared one.
-
-**The trail cannot lie.** It is emitted by movement itself and cannot be
-forged. So what is exposed here is never a "false trail" — no such thing
-exists — but a *verbal* claim caught contradicting the environment. The
-asymmetry is the point: the liar's own physics testify against them, and the
-attempt to mislead is what reveals the position.
-
-**Absence of evidence is graded, not binary.** A claim is scored by the gap
-between the intensity it predicts and the intensity measured, relative to what
-was predicted. A claim about a cell we would expect to be faint anyway is weak
-evidence either way; a claim about a cell that should be blazing and is silent
-is close to proof. Scoring the ratio rather than the difference keeps a
-prediction of 0.81 against 0.00 far more damning than 0.05 against 0.00.
-
-The check is symmetric and both agents run it. The thief cross-checks the
-cop's trail against the cop's hints by exactly this procedure.
+Evaluates verbal claims against trail intensity and updates opponent credibility score.
 """
 
 from dataclasses import dataclass
@@ -36,14 +10,7 @@ from .inference import MAX_RELIABILITY as MAX_TRUST
 from .trail import DECAY
 
 FRESH_TRACE: float = round((1.0 - DECAY) * 0.9, 3)
-"""What a one-turn-old trace of a full-strength emission should measure.
-
-0.81 under the rulebook's multiplicative decay. This is the number the book's
-worked example computes, and it is why the decay rule had to be settled before
-the detector could be written: the reference implementation's subtraction
-predicts 0.80, so an agent using it would compute a different expectation and
-a different confidence from the same board.
-"""
+"""What a one-turn-old trace of a full-strength emission should measure."""
 
 CONTRADICTION = 0.6
 """Gap, as a fraction of what was predicted, above which a claim is a lie.
@@ -150,13 +117,7 @@ who starts telling the truth has information we would be refusing to hear.
 
 @dataclass
 class Credibility:
-    """How much this opponent's word is currently worth.
-
-    Adaptive, and asymmetric on purpose: contradictions multiply trust down
-    sharply, support adds it back slowly. The opponent picks the moment to
-    lie, so a rule that let them recover as fast as they fell would be a rule
-    they could farm.
-    """
+    """How much this opponent's word is currently worth."""
 
     reliability: float = START_RELIABILITY
     lies: int = 0

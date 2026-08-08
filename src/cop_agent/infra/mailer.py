@@ -1,33 +1,6 @@
 """Actually sending the report, once every gate has said yes.
 
-Everything this needs already existed and nothing tied it together: :mod:`.report`
-builds the message, :mod:`.gatekeeper` runs the three gates, :mod:`.token_store`
-holds the credential. Nothing called the API.
-
-FR-7.15 is what makes that urgent rather than tidy — **a side that does not
-report receives no points for the match, even if it won on the board.** The
-difference between playing correctly and scoring.
-
-**The order is the requirement, and it is enforced here rather than hoped for.**
-
-1. ``admit()`` — all three gates, and the quota slot is reserved *before* the
-   send, so a crash between the call and the response cannot leave a message
-   that went out uncounted.
-2. ``record_attempt()`` — on **every** attempt, including the ones that fail.
-   The DOS detector is looking for the shape of a loop, and a loop that fails
-   every time is the one most likely to be running.
-3. the send.
-4. a 429 goes to ``on_429()``, never to a retry. FR-7.22: insisting is what
-   gets an account suspended by the provider.
-
-**The API is a seam.** :class:`Sender` is a Protocol and :func:`gmail_sender`
-is the only code that imports a Google library. Every rule above is therefore
-testable against a counting fake — which is the only responsible way to test a
-component whose failure mode is *sending real mail to a lecturer*.
-
-**Nothing here decides to send.** :meth:`Mailer.send_report` is called by a
-person or by a match that has finished and been agreed; this module has no
-schedule, no retry-forever, and no opinion about when a report is due.
+Mailer class, Sender protocol, and gmail_sender client wrapper.
 """
 
 import time
@@ -96,14 +69,7 @@ class Mailer:
     """Every pause and why, so a slow send can be told from a stalled one."""
 
     def send_report(self, report: Report, sender_address: str) -> dict[str, Any]:
-        """Send one report. Returns whatever the API said.
-
-        Raises:
-            SendError: when a gate refused outright, when the retry budget is
-                spent, or when the provider kept saying 429. Never silently
-                gives up — a report that was not sent costs the match's points,
-                so the caller has to be told.
-        """
+        """Send one report. Returns whatever the API said."""
         message = Message(report=report, sender=sender_address)
         payload = message.raw()
 
@@ -120,12 +86,7 @@ class Mailer:
                 self._back_off(exc, attempt)
 
     def _admit(self) -> None:
-        """Run the gates, waiting when the bucket says *not yet*.
-
-        A :class:`~.gatekeeper.Wait` is not a refusal, so it is slept through
-        and the gates re-run — the quota is only charged once a request is
-        actually going out, so waiting costs nothing but time.
-        """
+        """Run the gates, waiting when the bucket says *not yet*."""
         while True:
             try:
                 verdict = self.gatekeeper.admit()

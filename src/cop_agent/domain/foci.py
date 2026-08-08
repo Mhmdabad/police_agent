@@ -1,27 +1,7 @@
 """Committing to one focus when belief splits in two.
 
-A contradicting hint does not move the peak — it **divides** it. The trail
-says south-east, the claim says north, and after the update there are two
-plausible clusters with no single argmax worth chasing. The distribution was
-always a cloud rather than a point; a contradiction is when that stops being a
-technicality.
-
-**The failure this prevents is oscillation, not error.** With two foci of
-similar mass, the argmax flips between them as evidence arrives, and an agent
-that re-targets every turn walks back and forth between two regions and
-arrives at neither. Both foci may be perfectly good guesses; the loss comes
-from never committing to one long enough to reach it. Thirty-five turns is not
-many, and the turns spent oscillating are the ones that decide the sub-game.
-
-So a chosen focus is **sticky**: it is kept until the evidence against it is
-decisive, not merely until something else is momentarily ahead. Switching
-requires the rival to lead by :data:`SWITCH_MARGIN`, which is a hysteresis
-band rather than a threshold — the same gap that must be crossed to leave is
-wider than the gap that would have been enough to pick differently at the
-start.
-
-Clusters are found by adjacency rather than by ranking cells. Two cells of a
-single hill are not two foci, and a top-N list would report them as such.
+Prevents oscillation between rival belief clusters. A chosen focus is sticky:
+kept until rival leads by SWITCH_MARGIN.
 """
 
 from dataclasses import dataclass, field

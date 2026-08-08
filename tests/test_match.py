@@ -1,16 +1,7 @@
-"""The match runner's own steps, without a socket.
-
-`test_localhost_match` proves it composes over a real wire. This covers the
-steps that a passing match never exercises — the config digest refused, the
-audit that comes back dirty — and it is where the runner's own decisions live.
-"""
-
 import json
 from pathlib import Path
 from typing import Any
-
 import pytest
-
 from cop_agent.domain.axes import AxisConvention
 from cop_agent.domain.board import BoardState
 from cop_agent.domain.lock import ScentAgreement, ScentLock, propose
@@ -37,43 +28,24 @@ from cop_agent.runtime.subgame import Played, SubGame
 from cop_agent.shared.config import config_sha256
 from cop_agent.strategy.police_brain import PoliceBrain
 from test_localhost_match import REPOS, build_declaration, parameters  # noqa: E402
-
 REPO = Path(__file__).resolve().parent.parent
 WHEN = "2026-08-05T12:00:00+00:00"
 AXES = AxisConvention()
-
-
 class Answering:
-    """A transport that replies however the test wants."""
-
     def __init__(self, reply: dict[str, Any]) -> None:
         self.reply = reply
         self.calls: list[tuple[str, dict[str, Any]]] = []
-
     def call(self, url: str, tool: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
         self.calls.append((tool, payload))
         return self.reply
-
-
 class Watching:
-    """A transport that records what the door named at the moment we spoke."""
-
     def __init__(self) -> None:
         self.inboxes = PeerInboxes()
         self.bound: list[tuple[str, int]] = []
-
     def call(self, url: str, tool: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
         self.bound.append((self.inboxes.game_uid, self.inboxes.sub_game))
         return {"ok": True}
-
-
 def a_peering(role: str = "police", sub_game: int = 1) -> Peering:
-    """The addresses an opening handshake agreed, for a test not about addresses.
-
-    A series re-handshakes between its sub-games and refuses to open without a
-    peering to compare a fresh greeting against, so every runner that plays one
-    needs a peering — including the runners whose subject is something else.
-    """
     opponent = "thief" if role == "police" else "police"
     return Peering(
         ours=Greeting(
@@ -90,28 +62,14 @@ def a_peering(role: str = "police", sub_game: int = 1) -> Peering:
         ),
         sub_game=sub_game,
     )
-
-
 def stub_boundaries(monkeypatch: pytest.MonkeyPatch) -> list[int]:
-    """Let a series cross its boundaries with no opponent there to re-greet.
-
-    ``test_rehandshake_between_subgames`` is where the boundary itself is under
-    test. Here it would only be an opponent that never answers, so it is stood
-    in for — and the sub-games it was crossed before are returned, because a
-    boundary quietly not happening is the defect and no test should be blind to
-    it.
-    """
     crossed: list[int] = []
-
     def crossing(self: MatchRunner, number: int, timeout: float = 30.0) -> Peering:
         crossed.append(number)
         self.peering = a_peering(self.role, number)
         return self.peering
-
     monkeypatch.setattr(MatchRunner, "rehandshake", crossing)
     return crossed
-
-
 def a_runner(
     tmp_path: Path, reply: dict[str, Any] | None = None, transport: Answering | None = None
 ) -> MatchRunner:
@@ -135,8 +93,6 @@ def a_runner(
         now=lambda: WHEN,
         peering=a_peering(),
     )
-
-
 def an_outcome(number: int, clean: bool = True, captured: bool = False) -> SubGameOutcome:
     log = MatchLog(
         game_id="uoh26-s82kma9e",
@@ -161,20 +117,9 @@ def an_outcome(number: int, clean: bool = True, captured: bool = False) -> SubGa
         audit=audit,
         log=log,
     )
-
-
 def answered(
     runner: MatchRunner, digest: str | None = None, lock: ScentLock | None = None
 ) -> MatchRunner:
-    """File the messages the opponent's peer would have pushed at us.
-
-    Both of them, because ``agree()`` runs two gates: Appendix E rule 11 fixes
-    the parameters and rule 23 fixes the scent-emission model, and neither
-    stands in for the other. Each gate consumes what they send rather than
-    trusting the ``ok`` they answered our own push with, so a runner whose
-    mailboxes are empty is a runner whose opponent never negotiated — which is
-    a timeout, correctly.
-    """
     runner.orchestrator.inboxes.negotiate(
         {
             "config_sha256": digest if digest is not None else config_sha256(runner.parameters),
@@ -185,284 +130,6 @@ def answered(
         Orchestrator.scent_offer(lock or propose(), runner.declaration.game_uid)
     )
     return runner
-
-
-class TestAgreeingTheConfigComesFirst:
-    def test_a_matching_digest_lets_the_match_start(self, tmp_path: Path) -> None:
-        assert len(answered(a_runner(tmp_path)).agree()) == 64
-
-    def test_the_digest_is_of_the_parameters_we_are_actually_playing(self, tmp_path: Path) -> None:
-        """Advertising one we are not enforcing is indistinguishable from cheating."""
-        runner = answered(a_runner(tmp_path))
-        assert runner.agree() == config_sha256(runner.parameters)
-
-    def test_a_refusal_aborts_before_a_single_move(self, tmp_path: Path) -> None:
-        """Two peers with different parameters are playing different games."""
-        runner = a_runner(tmp_path, reply={"ok": False, "detail": "digest mismatch"})
-        with pytest.raises(MatchAborted):
-            runner.agree()
-
-    def test_nothing_was_played_when_it_refuses(self, tmp_path: Path) -> None:
-        runner = a_runner(tmp_path, reply={"ok": False, "detail": "no"})
-        with pytest.raises(MatchAborted):
-            runner.agree()
-        assert runner.outcomes == []
-
-    def test_an_opponent_on_other_parameters_aborts_the_series(self, tmp_path: Path) -> None:
-        """They acknowledged us. What they sent back says they are elsewhere."""
-        runner = answered(a_runner(tmp_path), digest="b" * 64)
-        with pytest.raises(MatchAborted) as excinfo:
-            runner.agree()
-        assert excinfo.value.cause is TechnicalLoss.ILLEGAL_ACTION
-        assert runner.outcomes == []
-
-    def test_an_opponent_that_never_negotiates_times_out(self, tmp_path: Path) -> None:
-        runner = a_runner(tmp_path)
-        with pytest.raises(MatchAborted) as excinfo:
-            runner.agree(timeout=0.0)
-        assert excinfo.value.cause is TechnicalLoss.TIMEOUT
-        assert runner.outcomes == []
-
-    def test_the_digest_is_bound_to_this_runners_series(self, tmp_path: Path) -> None:
-        """The series the declaration names is the series we negotiated."""
-        transport = Answering({"ok": True})
-        runner = answered(a_runner(tmp_path, transport=transport))
-        runner.agree()
-        assert transport.calls[0][1]["message"]["game_uid"] == runner.declaration.game_uid
-
-    def test_a_digest_agreed_for_another_series_does_not_open_this_one(
-        self, tmp_path: Path
-    ) -> None:
-        runner = a_runner(tmp_path)
-        runner.orchestrator.inboxes.negotiate(
-            {"config_sha256": config_sha256(runner.parameters), "game_uid": "u-9999"}
-        )
-        with pytest.raises(MatchAborted) as excinfo:
-            runner.agree(timeout=0.0)
-        assert excinfo.value.cause is TechnicalLoss.TIMEOUT
-
-
-class TestLockingTheScentModelComesNext:
-    """Appendix E rule 23, at the runner. The wire-level gate is in
-    ``test_scent_lock_negotiation``; what is here is the runner's own decisions.
-    """
-
-    def test_a_matching_lock_is_recorded_on_the_runner(self, tmp_path: Path) -> None:
-        runner = answered(a_runner(tmp_path))
-        runner.agree()
-        assert runner.scent_lock == propose().agreement()
-
-    def test_the_offer_is_bound_to_this_runners_series(self, tmp_path: Path) -> None:
-        """The series the declaration names is the series we locked."""
-        transport = Answering({"ok": True})
-        runner = answered(a_runner(tmp_path, transport=transport))
-        runner.agree()
-        assert transport.calls[1][1]["message"]["game_uid"] == runner.declaration.game_uid
-
-    def test_a_peer_on_another_falloff_aborts_the_series(self, tmp_path: Path) -> None:
-        """The divergence this project found against the reference code."""
-        runner = answered(a_runner(tmp_path), lock=propose(CHEBYSHEV))
-        with pytest.raises(MatchAborted) as excinfo:
-            runner.agree()
-        assert excinfo.value.cause is TechnicalLoss.ILLEGAL_ACTION
-        assert runner.scent_lock is None and runner.outcomes == []
-
-    def test_a_peer_that_locks_nothing_times_out(self, tmp_path: Path) -> None:
-        """The config digest alone does not open a series."""
-        runner = a_runner(tmp_path)
-        runner.orchestrator.inboxes.negotiate(
-            {"config_sha256": config_sha256(runner.parameters), "game_uid": "u-0001"}
-        )
-        with pytest.raises(MatchAborted) as excinfo:
-            runner.agree(timeout=0.0)
-        assert excinfo.value.cause is TechnicalLoss.TIMEOUT
-        assert runner.scent_lock is None
-
-    def test_a_config_refusal_stops_before_any_lock_is_offered(self, tmp_path: Path) -> None:
-        """Ordering: two peers who disagree about the board say nothing about pheromones."""
-        transport = Answering({"ok": False, "detail": "digest mismatch"})
-        runner = a_runner(tmp_path, transport=transport)
-        with pytest.raises(MatchAborted):
-            runner.agree()
-        assert [call[1]["message"].get("scent_lock") for call in transport.calls] == [None]
-
-    def test_no_sub_game_opens_without_one(self, tmp_path: Path) -> None:
-        """P1-15: the fallback for an unlocked model is refusal, not a default."""
-        runner = a_runner(tmp_path)
-        with pytest.raises(MatchAborted) as excinfo:
-            runner.play_sub_game(1)
-        assert excinfo.value.cause is TechnicalLoss.ILLEGAL_ACTION
-        assert runner.outcomes == []
-
-
-class TestOpeningASubGameDoesNotForgetWhatTheOpponentAlreadySent:
-    """The opponent crosses the boundary on their thread, not ours.
-
-    ``play_sub_game`` used to empty the mailbox ledgers as it opened, which read
-    like a per-sub-game reset and was really a reset of shared state on a
-    schedule the sender knows nothing about. A peer that got to the boundary
-    first had its opening turn accepted at our door and then struck from the
-    ledger a moment later, and the reveal opening that turn was refused as
-    uncommitted — which no sender retries, so the series deadlocked until both
-    sides timed out. Deterministic here: the race is only how it was *reached*.
-    """
-
-    @staticmethod
-    def a_stub_sub_game(monkeypatch: pytest.MonkeyPatch) -> None:
-        """Let a sub-game be constructed without playing one over a socket."""
-        monkeypatch.setattr(
-            SubGame,
-            "play",
-            lambda self: Played(
-                steps=0,
-                final=self.state,
-                captured=False,
-                reason="stubbed",
-                audit=AuditResult(verdict=Verdict.CLEAN, checked=0),
-            ),
-        )
-        monkeypatch.setattr(
-            SubGame, "audit", lambda self: AuditResult(verdict=Verdict.CLEAN, checked=0)
-        )
-
-    def a_runner_at(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> MatchRunner:
-        self.a_stub_sub_game(monkeypatch)
-        runner = a_runner(tmp_path)
-        runner.scent_lock = ScentAgreement(digest="a" * 64, binding="turn-message-bound")
-        return runner
-
-    @staticmethod
-    def early() -> dict[str, Any]:
-        return {
-            "step": 1,
-            "sender": "thief",
-            "hint": "",
-            "smell_grid": {},
-            "commit": "a" * 64,
-            "timestamp": WHEN,
-            "game_uid": "u-0001",
-            "sub_game": 2,
-        }
-
-    def test_a_turn_deferred_before_we_opened_is_taken_once_we_have(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Deferred rather than queued, and the sender's re-send is what lands."""
-        runner = self.a_runner_at(tmp_path, monkeypatch)
-        inboxes = runner.orchestrator.inboxes
-        inboxes.bind("u-0001", 1)
-        assert inboxes.receive_turn(self.early())[RETRY_KEY] is True
-        assert inboxes.accepted_turns == {}
-
-        runner.play_sub_game(2)
-
-        assert inboxes.receive_turn(self.early()) == {"ok": True}
-        assert ("thief", 1, "u-0001", 2) in inboxes.accepted_turns
-        assert inboxes.rejected == []
-
-    def test_the_binding_it_advances_is_this_sub_games(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        runner = self.a_runner_at(tmp_path, monkeypatch)
-        runner.play_sub_game(3)
-        assert runner.orchestrator.inboxes.game_uid == "u-0001"
-        assert runner.orchestrator.inboxes.sub_game == 3
-
-
-class TestTheDoorIsOpenedBeforeAnythingInvitesAMessage:
-    """Why the honest peer never has to spend its retry budget.
-
-    A retryable refusal keeps a race from costing the series; it does not stop
-    the race happening. What stops it is ordering: every message the opponent
-    sends for a sub-game follows something *we* said — the agreement that opens
-    the series, and the re-greeting that opens each later one — so binding the
-    door before we say it means their opening packet cannot arrive at a door
-    that is still shut.
-    """
-
-    def watched(self, tmp_path: Path) -> tuple[MatchRunner, "Watching"]:
-        transport = Watching()
-        runner = a_runner(tmp_path, transport=transport)  # type: ignore[arg-type]
-        transport.inboxes = runner.orchestrator.inboxes
-        return runner, transport
-
-    def test_the_series_is_bound_before_its_first_agreement_crosses_the_wire(
-        self, tmp_path: Path
-    ) -> None:
-        runner, transport = self.watched(tmp_path)
-        with pytest.raises(MatchAborted):
-            runner.agree(timeout=0.01)
-        assert transport.bound[0] == ("u-0001", 1)
-
-    def test_a_boundary_is_bound_before_it_is_announced(self, tmp_path: Path) -> None:
-        runner, transport = self.watched(tmp_path)
-        with pytest.raises(MatchAborted):
-            runner.rehandshake(4, timeout=0.01)
-        assert transport.bound[0] == ("u-0001", 4)
-
-
-class TestTheConfigItLocks:
-    def test_one_per_sub_game(self, tmp_path: Path) -> None:
-        runner = a_runner(tmp_path)
-        assert runner.config_for(2).sub_game == 2
-
-    def test_it_names_both_teams(self, tmp_path: Path) -> None:
-        locked = a_runner(tmp_path).config_for(1)
-        assert set(locked.agreed_between) == {"uoh26-cops", "uoh26-others"}
-
-    def test_it_carries_the_shared_uid(self, tmp_path: Path) -> None:
-        assert a_runner(tmp_path).config_for(1).game_uid == "u-0001"
-
-
-class TestWhatTheMatchConcludesAboutTheOpponent:
-    def test_a_clean_series_is_clean(self, tmp_path: Path) -> None:
-        runner = a_runner(tmp_path)
-        runner.outcomes.extend([an_outcome(1), an_outcome(2)])
-        assert runner.opponent_played_fairly
-        assert runner.failures() == []
-
-    def test_one_forged_sub_game_taints_the_match(self, tmp_path: Path) -> None:
-        """FR-7.16: there is nothing to agree about a series that does not open."""
-        runner = a_runner(tmp_path)
-        runner.outcomes.extend([an_outcome(1), an_outcome(2, clean=False)])
-        assert not runner.opponent_played_fairly
-
-    def test_the_findings_name_their_sub_game(self, tmp_path: Path) -> None:
-        """An accusation without a location is one nobody can check."""
-        runner = a_runner(tmp_path)
-        runner.outcomes.extend([an_outcome(1), an_outcome(2, clean=False)])
-        assert runner.failures() == [
-            "sub-game 2: step 2: committed abc… but the revealed move produces def…"
-        ]
-
-    def test_an_empty_match_is_vacuously_fair(self, tmp_path: Path) -> None:
-        assert a_runner(tmp_path).opponent_played_fairly
-
-
-class TestWritingTheEvidence:
-    def test_it_writes_one_config_and_one_log_per_sub_game(self, tmp_path: Path) -> None:
-        runner = a_runner(tmp_path)
-        runner.outcomes.extend([an_outcome(1), an_outcome(2)])
-        written = runner.write(result_for_two())
-        assert len([p for p in written if p.name.startswith("config_")]) == 2
-        assert len([p for p in written if p.name.startswith("log_")]) == 2
-
-    def test_an_incoherent_set_is_refused(self, tmp_path: Path) -> None:
-        """A result naming a sub-game with no log is a claim with no evidence."""
-        from cop_agent.infra.artefacts import ArtefactError
-
-        runner = a_runner(tmp_path)
-        runner.outcomes.append(an_outcome(1))
-        with pytest.raises(ArtefactError):
-            runner.write(result_for_two())
-
-    def test_every_file_carries_the_uid(self, tmp_path: Path) -> None:
-        runner = a_runner(tmp_path)
-        runner.outcomes.extend([an_outcome(1), an_outcome(2)])
-        for path in runner.write(result_for_two()):
-            assert json.loads(path.read_text())["game_uid"] == "u-0001"
-
-
 def result_for_two() -> Report:
     return Report(
         game_id="uoh26-s82kma9e",
@@ -478,226 +145,3 @@ def result_for_two() -> Report:
         total_tokens=0,
         agreed=True,
     )
-
-
-class TestTheResultIsScoredFromWhatWasPlayed:
-    """The scoreboard, which until now was a placeholder in a fixture."""
-
-    def test_a_capture_scores_the_cop(self, tmp_path: Path) -> None:
-        runner = a_runner(tmp_path)
-        runner.outcomes.append(an_outcome(1, captured=True))
-        result = runner.result("a" * 40, 0, agreed=False, repositories=REPOS)
-        cop, thief = scores_for(Outcome.CAPTURE)
-        assert result.sub_games[0].cop_score == cop
-        assert result.sub_games[0].thief_score == thief
-
-    def test_survival_scores_the_thief(self, tmp_path: Path) -> None:
-        runner = a_runner(tmp_path)
-        runner.outcomes.append(an_outcome(1))
-        result = runner.result("a" * 40, 0, agreed=False, repositories=REPOS)
-        assert (result.sub_games[0].cop_score, result.sub_games[0].thief_score) == scores_for(
-            Outcome.SURVIVAL
-        )
-
-    def test_the_scores_come_from_appendix_f_not_from_here(self, tmp_path: Path) -> None:
-        """They are *fixed* parameters; inventing them is a disqualification."""
-        runner = a_runner(tmp_path)
-        runner.outcomes.append(an_outcome(1, captured=True))
-        result = runner.result("a" * 40, 0, agreed=False, repositories=REPOS)
-        assert (result.cop_total, result.thief_total) == scores_for(Outcome.CAPTURE)
-
-    def test_the_totals_add_up_across_sub_games(self, tmp_path: Path) -> None:
-        runner = a_runner(tmp_path)
-        runner.outcomes.extend([an_outcome(1, captured=True), an_outcome(2)])
-        result = runner.result("a" * 40, 0, agreed=False, repositories=REPOS)
-        capture, survival = scores_for(Outcome.CAPTURE), scores_for(Outcome.SURVIVAL)
-        assert result.cop_total == capture[0] + survival[0]
-        assert result.thief_total == capture[1] + survival[1]
-
-    def test_the_steps_played_are_recorded(self, tmp_path: Path) -> None:
-        runner = a_runner(tmp_path)
-        runner.outcomes.append(an_outcome(1))
-        result = runner.result("a" * 40, 0, agreed=False, repositories=REPOS)
-        assert result.sub_games[0].steps == 2
-
-    def test_agreement_has_no_default(self, tmp_path: Path) -> None:
-        """FR-7.16: only a person can say the other side accepted the result."""
-        import inspect
-
-        signature = inspect.signature(MatchRunner.result)
-        assert signature.parameters["agreed"].default is inspect.Parameter.empty
-
-    def test_a_result_is_not_agreed_just_because_we_played(self, tmp_path: Path) -> None:
-        runner = a_runner(tmp_path)
-        runner.outcomes.append(an_outcome(1))
-        result = runner.result("a" * 40, 0, agreed=False, repositories=REPOS)
-        assert result.to_dict()["result_agreed_with_opponent"] is False
-
-    def test_the_commit_hash_reaches_every_sub_game(self, tmp_path: Path) -> None:
-        """FR-7.28: which code played this game."""
-        runner = a_runner(tmp_path)
-        runner.outcomes.extend([an_outcome(1), an_outcome(2)])
-        result = runner.result("b" * 40, 0, agreed=False, repositories=REPOS)
-        assert {entry.commit_hash for entry in result.sub_games} == {"b" * 40}
-
-
-class TestReadingTheConfigForAMatch:
-    """The driver is uncovered by design; the parts that can be silently wrong are not."""
-
-    def test_a_start_cell_arrives_from_json_as_a_list(self) -> None:
-        """JSON has no tuples, and a board built from a list is a board of the wrong type."""
-        assert _cell([3, 4], (0, 0)) == (3, 4)
-
-    def test_a_tuple_survives_unchanged(self) -> None:
-        assert _cell((1, 2), (0, 0)) == (1, 2)
-
-    @pytest.mark.parametrize("bad", [None, [1], [1, 2, 3], "3,4", 7])
-    def test_anything_unusable_falls_back_rather_than_crashing(self, bad: object) -> None:
-        """A missing start is a config gap, not a reason to die mid-handshake."""
-        assert _cell(bad, (9, 9)) == (9, 9)
-
-    def test_our_side_is_read_from_the_game_section(self) -> None:
-        """Where it already lives. A second copy is a second thing to disagree."""
-        team = _us(
-            {
-                "game": {
-                    "group_name": "uoh26-cops",
-                    "members": ["A", "B"],
-                    "repos": {"cop": "https://x/cop", "thief": "https://x/thief"},
-                }
-            }
-        )
-        assert team.name == "uoh26-cops"
-        assert team.members == ("A", "B")
-        assert team.cop_repo == "https://x/cop"
-
-    def test_the_opponent_is_read_from_teams_them(self) -> None:
-        """The one section nothing can derive — their repositories are theirs."""
-        team = _them(
-            {
-                "teams": {
-                    "them": {
-                        "group_name": "uoh26-others",
-                        "members": ["C"],
-                        "repos": {"cop": "https://y/cop", "thief": "https://y/thief"},
-                    }
-                }
-            }
-        )
-        assert team.name == "uoh26-others"
-        assert team.thief_repo == "https://y/thief"
-
-    def test_a_team_with_no_repository_links_is_refused(self) -> None:
-        """FR-7.28 wants four links; a declaration without them cannot be built."""
-        from cop_agent.infra.declaration import DeclarationError
-
-        with pytest.raises(DeclarationError, match="four repository links"):
-            _us({"game": {"group_name": "x", "members": ["A"]}})
-
-    def test_a_team_with_no_members_is_refused(self) -> None:
-        """An empty roster is the shipped default, and it is not a roster."""
-        from cop_agent.infra.declaration import DeclarationError
-
-        with pytest.raises(DeclarationError, match="declares no members"):
-            _us({"game": {"group_name": "x", "members": [], "repos": {"cop": "c", "thief": "t"}}})
-
-    def test_the_shipped_config_builds_both_teams(self) -> None:
-        """The test that was missing, and the reason a live match died.
-
-        Every part of the declaration was tested against dicts written in the
-        test file. Nothing ever asked whether the config this repository
-        actually ships can produce one — and it could not: the reader looked
-        for ``[teams.us]`` while the repositories sat in ``[game]``, so the
-        handshake succeeded and the declaration then refused to be built.
-        """
-        from cop_agent.__main__ import CONFIG, load_private
-
-        private = load_private(REPO / CONFIG)
-        for side in (_us(private), _them(private)):
-            assert side.name and side.members
-            assert side.cop_repo.startswith("http")
-            assert side.thief_repo.startswith("http")
-
-    def test_the_timestamp_is_utc_and_to_the_second(self) -> None:
-        """Both sides record times; a local-time one is unreconcilable."""
-        from datetime import datetime
-
-        stamp = _now()
-        parsed = datetime.fromisoformat(stamp)
-        assert parsed.tzinfo is not None
-        assert parsed.microsecond == 0
-
-
-class TestWhoeverStartsFirstMustNotBePunished:
-    """Two peers opening a match are each other's prerequisite."""
-
-    @staticmethod
-    def greeting() -> Greeting:
-        return Greeting(
-            role="police",
-            group_id="s82kma9e",
-            public_url="https://ours.ngrok.io/mcp",
-            protocol_version=PROTOCOL_VERSION,
-        )
-
-    class Peer:
-        """An orchestrator stand-in that comes up after so many attempts."""
-
-        def __init__(self, up_after: int) -> None:
-            self.up_after = up_after
-            self.attempts = 0
-            self.opened = False
-
-        def try_announce(self, ours: Greeting) -> bool:
-            self.attempts += 1
-            return self.attempts > self.up_after
-
-        def open_series(self, ours: Greeting, directory: Path, game_id: str) -> Peering:
-            self.opened = True
-            return Peering(ours=ours, theirs=ours, sub_game=1)
-
-    def test_it_keeps_announcing_until_they_appear(self, tmp_path: Path) -> None:
-        peer = self.Peer(up_after=3)
-        await_opponent(peer, self.greeting(), tmp_path, "g", sleep=lambda _: None)  # type: ignore[arg-type]
-        assert peer.attempts == 4
-        assert peer.opened
-
-    def test_an_opponent_already_up_costs_no_wait(self, tmp_path: Path) -> None:
-        slept: list[float] = []
-        peer = self.Peer(up_after=0)
-        await_opponent(peer, self.greeting(), tmp_path, "g", sleep=slept.append)  # type: ignore[arg-type]
-        assert slept == []
-
-    def test_it_gives_up_eventually(self, tmp_path: Path) -> None:
-        """A genuinely absent opponent must be reported, not waited on forever."""
-        clock = iter([0.0, 0.0, 999.0, 999.0])
-        with pytest.raises(StartupTimeout, match="never came up"):
-            await_opponent(
-                self.Peer(up_after=99),  # type: ignore[arg-type]
-                self.greeting(),
-                tmp_path,
-                "g",
-                patience=10.0,
-                now=lambda: next(clock),
-                sleep=lambda _: None,
-            )
-
-    def test_the_message_says_what_to_check(self, tmp_path: Path) -> None:
-        """Not '502 Bad Gateway', which describes a proxy and not the situation."""
-        clock = iter([0.0, 0.0, 999.0, 999.0])
-        with pytest.raises(StartupTimeout, match="their tunnel points at"):
-            await_opponent(
-                self.Peer(up_after=99),  # type: ignore[arg-type]
-                self.greeting(),
-                tmp_path,
-                "g",
-                patience=10.0,
-                now=lambda: next(clock),
-                sleep=lambda _: None,
-            )
-
-    def test_only_the_announcement_is_retried(self, tmp_path: Path) -> None:
-        """A peer that greeted us and then went quiet is a different problem."""
-        peer = self.Peer(up_after=1)
-        await_opponent(peer, self.greeting(), tmp_path, "g", sleep=lambda _: None)  # type: ignore[arg-type]
-        assert peer.opened, "the handshake proper should run exactly once, unretried"

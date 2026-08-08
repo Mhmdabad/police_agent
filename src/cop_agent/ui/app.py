@@ -1,24 +1,4 @@
-"""The two windows a person actually looks at, and the screenshots FR-7.14 wants.
-
-Two apps, both Tkinter:
-
-* ``python -m cop_agent.ui.app live`` — the board as *we* see it, with the
-  belief heatmap and the turn banner.
-* ``python -m cop_agent.ui.app replay <log.json>`` — a recorded sub-game,
-  stepped with the arrow keys, stamped ``Verified OK`` or ``TAMPERED``.
-
-**The live window is never handed the opponent's true cell.** Not "does not draw
-it" — is not given it. :func:`~.view.render` has no parameter for it, so the
-window physically cannot leak what the agent is not supposed to know, and that
-is enforced by a signature rather than by discipline.
-
-**Almost nothing here is Tk.** The layout is computed in :mod:`.paint` against a
-Protocol and tested against a recording painter; :class:`CanvasPainter` is four
-delegating lines, tested against a fake canvas. Only the two ``run_*`` functions
-touch a real display, and they are marked uncovered — a test that opened a
-window would need a display CI does not have, and would prove nothing the layout
-tests do not already prove.
-"""
+"""The two windows a person looks at: live and replay."""
 
 import argparse
 import sys
@@ -42,16 +22,7 @@ STAMP_COLOUR = {
 
 
 class Canvas(Protocol):
-    """The slice of ``tkinter.Canvas`` this module uses.
-
-    Describes the exact three calls made below, not the library. A looser
-    Protocol — ``*args: object`` — reads as more accommodating and is in fact
-    *stricter on the implementation*: it promises callers may pass anything,
-    which a real ``tkinter.Canvas`` does not honour, so the real canvas would
-    not satisfy it. That is the same mistake ``ToolHost`` made about ``FastMCP``
-    in #285, caught here by mypy for the same reason: a Protocol is only true
-    once something concrete is passed to it.
-    """
+    """The slice of ``tkinter.Canvas`` this module uses."""
 
     def create_rectangle(
         self, x0: int, y0: int, x1: int, y1: int, *, fill: str, outline: str
@@ -65,7 +36,7 @@ class Canvas(Protocol):
 
 
 class CanvasPainter:
-    """Adapts a Tk canvas to :class:`~.paint.Painter`. Four lines, no logic."""
+    """Adapts a Tk canvas to :class:`~.paint.Painter`."""
 
     def __init__(self, canvas: Canvas) -> None:
         self.canvas = canvas
@@ -83,11 +54,7 @@ class CanvasPainter:
 def draw_live(
     state: BoardState, belief: Belief, role: str, ours: Position, painter: CanvasPainter
 ) -> None:
-    """One frame of the live window.
-
-    ``render`` is given our position and our belief, and nothing else. There is
-    no argument through which the opponent's true cell could arrive.
-    """
+    """One frame of the live window."""
     glyph, other = ("C", "T") if role == "police" else ("T", "C")
     view = render(state, belief, role, ours, glyph, other)
     painter.clear()
@@ -95,13 +62,7 @@ def draw_live(
 
 
 def draw_replay(replay: Replay, painter: CanvasPainter) -> str:
-    """One frame of the Replay App, and the stamp that goes above it.
-
-    The verdict is computed over the *whole* log rather than the step on screen.
-    A viewer that stamped each step as the reader arrived at it would show
-    ``Verified OK`` on a tampered log for as long as the reader stayed early in
-    it, which is the one thing this window must never do.
-    """
+    """One frame of the Replay App, and the stamp that goes above it."""
     result = walk(replay)
     painter.clear()
     paint_stamp(result.stamp.text, STAMP_COLOUR[result.stamp], 1, painter)

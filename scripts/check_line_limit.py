@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""Fail if any Python module in ``src/`` is longer than 149 lines (task 0.10).
-
-CONTRIBUTING.md asks for short modules (~150 lines) so responsibilities stay
-separated. This gate is strict: there is no exemption list, and a file at 150
-lines or more fails the build until it is split.
-"""
+"""Fail if a maintained text file is longer than 149 lines."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 MAX_LINES = 149
+EXEMPT_FILES = {"uv.lock"}
+EXEMPT_PARTS = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+}
 
 
 def line_count(path: Path) -> int:
@@ -21,9 +25,14 @@ def line_count(path: Path) -> int:
 def main() -> int:
     over: list[tuple[int, str]] = []
     checked = 0
-    for path in sorted(Path("src").rglob("*.py")):
+    for path in sorted(path for path in Path(".").rglob("*") if path.is_file()):
+        if path.name in EXEMPT_FILES or any(part in EXEMPT_PARTS for part in path.parts):
+            continue
+        try:
+            count = line_count(path)
+        except UnicodeDecodeError:
+            continue
         checked += 1
-        count = line_count(path)
         if count > MAX_LINES:
             over.append((count, path.as_posix()))
 
@@ -32,7 +41,7 @@ def main() -> int:
         for count, name in sorted(over, reverse=True):
             print(f"  {count:5d}  {name}")
         return 1
-    print(f"{checked} modules all within the {MAX_LINES}-line budget")
+    print(f"{checked} maintained text files all within the {MAX_LINES}-line budget")
     return 0
 
 

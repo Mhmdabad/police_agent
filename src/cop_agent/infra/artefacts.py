@@ -1,28 +1,6 @@
 """One `game_uid` across all four files, and every name derived from `game_id`.
 
-With up to ten counted matches of six sub-games each, a repository ends up
-holding sixty logs, sixty configs, ten declarations and ten results. The naming
-discipline is not tidiness — it is what keeps the evidence trail able to answer
-"which files belong to which match" without anybody's memory being involved.
-
-Two identifiers, doing different jobs:
-
-* **``game_id``** is the *filename* component. It is constrained to characters
-  that are safe in a path (:mod:`..shared.naming`), and it is what a person
-  reads off a directory listing.
-* **``game_uid``** is the *content* identifier. It appears inside all four
-  files and is what ties a log to the declaration that fixed the match. It has
-  no filename constraints because it never becomes one.
-
-Keeping them separate matters because they fail differently. Two matches with
-the same ``game_id`` overwrite each other's files — loud, immediate, obvious.
-Two matches with the same ``game_uid`` produce files that all look valid and
-cross-reference the wrong match — silent, and discovered at an audit if at all.
-
-**This module does not generate identifiers; it checks a set of artefacts
-agrees on one.** Minting a uid is a job for whoever starts a match, and a
-function that both minted and verified would be reduced, on the first awkward
-bug, to minting a fresh one to make the check pass.
+Validates coherence of declaration, configs, logs, and report.
 """
 
 from dataclasses import dataclass
@@ -98,12 +76,7 @@ class ArtefactSet:
         )
 
     def check(self) -> Coherence:
-        """Every disagreement about identity, collected at once.
-
-        Reported rather than raised, and reported *whole*. An examiner fixing
-        one mismatch only to be told about the next is being made to do a
-        search this function has already done.
-        """
+        """Every disagreement about identity, collected at once."""
         problems: list[str] = []
         for config in self.configs:
             if config.game_id != self.game_id:

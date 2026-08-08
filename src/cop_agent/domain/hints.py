@@ -1,24 +1,6 @@
 """Reading the opponent's words as a claim about the board.
 
-A hint is free natural language — "I slipped past the bridge", "heading up
-north". This turns that into a claim: a weight over cells, which is what the
-Bayes update consumes. It does not decide anything; it only says what the
-opponent asserted.
-
-**Numeric coordinates are forbidden and are refused, not parsed.** The
-rulebook bans a numeric-coordinate protocol outright, and the ban is the point
-of the whole verbal layer: a hint that says "3,4" is not a claim in natural
-language, it is a position exchange wearing a sentence. Accepting one would
-mean playing a different game from the one both teams agreed to — and quietly
-rewarding an opponent who cheats, since their "hint" would be worth more than
-anyone else's. So a coordinate-bearing hint raises rather than being read
-generously.
-
-Everything else is read charitably. The opponent is not obliged to be clear,
-only truthful-or-not, and an unparseable hint is silence rather than an error:
-:func:`parse` returns an empty claim, the Bayes update leaves the prior alone,
-and the trail still speaks. Refusing to act on a hint we did not understand is
-correct; refusing to *play* because of one is not.
+Converts natural language hints into spatial belief claims. Rejects numeric coordinates.
 """
 
 import re
@@ -159,11 +141,6 @@ def parse(text: str, state: BoardState, speaker: Position) -> dict[Position, flo
 
 
 def truncate(text: str, cap: int = MAX_WORDS) -> str:
-    """Cut our own hint to the agreed word cap.
-
-    Applied to what we send, never to what we receive. Emitting a hint over
-    the cap is our violation to avoid; receiving one is the opponent's, and
-    discarding it would let them silence us by rambling.
-    """
+    """Cut our own hint to the agreed word cap."""
     tokens = text.split()
     return text if len(tokens) <= cap else " ".join(tokens[:cap])

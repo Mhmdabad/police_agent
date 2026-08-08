@@ -1,41 +1,6 @@
 """All three gates in front of one request, and what a 429 means afterwards.
 
-FR-7.21: a request reaches the API only after passing **all three** gates, and
-each fails fast. This module is the order they run in and nothing else — the
-gates themselves live in :mod:`.quota`, :mod:`.token_bucket` and
-:mod:`.dos_detector`.
-
-The order is not arbitrary. Cheapest and most final first:
-
-1. **DOS detector** — if the pipeline is locked, nothing else matters and no
-   state should be spent finding that out.
-2. **Quota** — a hard daily ceiling, *checked* here and **reserved** only once
-   the request is actually going out. Checking early keeps the fail-fast
-   ordering; reserving late is what stops a *wait* from costing a slot. A
-   caller that is told to wait has sent nothing, and charging it would let a
-   correctly-throttled loop drain the whole day's ceiling without a single
-   message leaving — refused, in the end, by the gate that was protecting it.
-   The reservation still happens **before the send**, which is the ordering
-   that matters: a crash between the call and the response cannot leave an
-   uncounted message.
-3. **Token bucket** — the only gate that says "not yet" rather than "no". It
-   comes before the reservation for the reason above, and after the quota
-   *check* because a request that will be refused outright should never have
-   waited for a token first.
-
-**429 is not a transient glitch.** FR-7.22 is explicit: insisting and
-immediately re-sending can get the account suspended *by the provider*. So a 429
-does not enter the ordinary retry path. It is treated as a statement about the
-window we are in, honoured with a wait, and — because the provider has just told
-us our own rate limiting was wrong — it also **spends a token from the bucket**,
-so the next request is further away than it would otherwise have been. A limiter
-that ignored the one authoritative signal about its own configuration would keep
-making the same mistake politely.
-
-There is deliberately **no path that retries a 429 without waiting**. The wait
-comes from ``Retry-After`` when the provider sends one, and from the configured
-backoff when it does not; the provider's number wins whenever it is larger,
-because it knows about its own window and we are guessing.
+Executes DOS detector, Quota, and Token Bucket in sequence.
 """
 
 from collections.abc import Callable
@@ -87,18 +52,7 @@ class Gatekeeper:
     limiter: Limiter
 
     def admit(self) -> Wait | None:
-        """Run all three gates. ``None`` means send now.
-
-        Returns:
-            ``None`` when the request may go immediately, or a :class:`Wait`
-            when the bucket wants time. A wait is not a refusal — the caller
-            should sleep and call again.
-
-        Raises:
-            Rejected: when a gate refuses outright. The message names the gate,
-                because "blocked" without a reason sends somebody to read three
-                modules.
-        """
+        """Run all three gates. ``None`` means send now."""
         try:
             self.detector.check()
         except Exception as exc:  # noqa: BLE001 - re-raised as one gate error below
