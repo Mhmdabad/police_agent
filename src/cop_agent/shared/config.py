@@ -93,7 +93,25 @@ def validate(config: dict[str, Any]) -> None:
 
 
 def series_length(config: dict[str, Any], requested: int | None = None) -> int:
-    """How many sub-games one series against an opponent is."""
+    """How many sub-games one series against an opponent is.
+
+    Appendix F table 18 row 1 fixes it at six, and a fixed parameter is the kind
+    whose deviation disqualifies the team rather than merely losing a game. So
+    the number is never a default written next to a flag or a loop: it is read
+    back out of a *validated* configuration, which cannot hold any other value
+    and still validate. That is why this returns the book value rather than the
+    file's — after :func:`validate` they are the same number, and returning the
+    book one makes a series of any other length unrepresentable.
+
+    Args:
+        requested: a length asked for from outside — a command-line flag, say —
+            or ``None`` for "whatever the book says".
+
+    Raises:
+        ConfigError: if the configuration deviates anywhere, or if ``requested``
+            is anything but the book length. Refused here, before a socket
+            opens, rather than played out and found at the opponent's audit.
+    """
     validate(config)
     length = book_int(SERIES_SECTION, SERIES_KEY)
     if requested is not None and requested != length:
@@ -106,7 +124,34 @@ def series_length(config: dict[str, Any], requested: int | None = None) -> int:
 
 
 def canonical_bytes(payload: dict[str, Any]) -> bytes:
-    """The one canonical form. Every digest in this system is taken over it."""
+    """The one canonical form. Every digest in this system is taken over it.
+
+    The config digest, the scent lock, the step commitments and the transport
+    payload freeze all hash through here. One implementation rather than
+    several, because two canonical forms that disagree is the same defect as
+    none: both sides serialise "canonically", both get different bytes, and the
+    audit calls an honest match tampered.
+
+    Three settings, and the third is the one that bites:
+
+    ``sort_keys=True``
+        Key order is an accident of construction and must not reach the digest.
+
+    ``separators=(",", ":")``
+        No incidental whitespace.
+
+    ``ensure_ascii`` left at its default of **True**
+        Non-ASCII is escaped to ``\\uXXXX``, so the output is pure ASCII
+        whatever went in. This looks like the setting to turn off — raw UTF-8
+        reads better and is just as deterministic *on its own*. It is the wrong
+        call here, because determinism alone is not the requirement:
+        interoperability is. The rulebook's own ``commit()`` leaves the default
+        (p. 37), so an opponent running that code escapes where we would not,
+        and the first hint carrying a non-ASCII character produces two
+        different digests from two honest peers — a ``TAMPERED`` verdict, no
+        appeal, zero for both sides. Hints are free natural language, so that
+        character will arrive eventually.
+    """
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 

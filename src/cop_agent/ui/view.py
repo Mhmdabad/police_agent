@@ -1,6 +1,22 @@
 """What the live display is allowed to know, computed before anything is drawn.
 
-Builds view model from local agent truth only without revealing opponent state.
+The rulebook's constraint on the GUI is not cosmetic: an agent shows **its own
+local truth** and never a bird's-eye view of the board. The reason is the whole
+premise of the project — this is a Dec-POMDP, each side acts under partial
+observation, and a window that happened to render the opponent's real cell
+would make the belief map decorative and the hints pointless. It would also be
+invisible in a screenshot, because a correct-looking board and a cheating board
+differ by one variable.
+
+So the view model is built here, in a function that **cannot see the
+opponent's position** — not because it chooses not to look, but because the
+argument is not passed. :func:`render` takes our own cell, our belief and the
+barriers. There is no parameter that could carry the truth, which is the only
+version of this rule that survives someone later "just adding a debug marker".
+
+Separating the model from the widget is what makes that checkable. A Tkinter
+canvas cannot be asserted on in CI, and a rule this important should not be
+tested by looking at a screenshot.
 """
 
 from dataclasses import dataclass

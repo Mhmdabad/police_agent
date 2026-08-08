@@ -1,6 +1,36 @@
 """Gate two: the token bucket, and the queue in front of it.
 
-TokenBucket and Limiter classes for rate limiting.
+The rulebook's formula, verbatim (FR-7.19)::
+
+    tokens ← min(C, tokens + r·Δt),      allow ⟺ tokens ≥ 1
+
+``C`` is the burst capacity, ``r`` the steady refill rate. The sentence worth
+keeping from the book is that **silence is rewarded with future burst capacity**:
+an agent that has been quiet accumulates tokens up to ``C`` and may then spend
+them at once, which is exactly right for something that reports at the end of a
+match rather than continuously.
+
+**These are rate tokens.** The rulebook warns that three unrelated things in this
+project are called "token" and must not be confused — rate tokens here, LLM
+tokens in :mod:`.token_ledger`, OAuth tokens in :mod:`.token_store`. Nothing in
+this module has anything to do with either of the others.
+
+**Refill is computed, not ticked.** There is no background thread and no timer.
+``tokens`` is derived from the elapsed time since the last update every time
+somebody asks, which means the bucket behaves identically whether the process
+was busy, idle, or stopped for an hour — and it means a test can drive a decade
+of behaviour through a fake clock in microseconds.
+
+The Appendix F values (30 rpm, 2 concurrent, 5 s backoff, 3 retries, queue 100)
+are **minimums**, so this reads them through :func:`~..shared.appendix_f.book_value`
+and refuses to be configured *below* them. A parameter marked minimum that drifts
+downward is a deviation the audit catches; one that drifts upward is allowed and
+sometimes sensible.
+
+A monotonic clock is used rather than the wall clock. A wall clock that steps
+backwards — NTP correction, a laptop resuming from sleep — would compute a
+negative Δt and, with a naive implementation, either stall the bucket until real
+time caught up or refill it wildly. Neither is a thing to debug during a match.
 """
 
 import time
@@ -36,7 +66,12 @@ class QueueFull(RateLimitError):
 
 @dataclass
 class TokenBucket:
-    """``tokens ← min(C, tokens + r·Δt)``, evaluated on demand."""
+    """``tokens ← min(C, tokens + r·Δt)``, evaluated on demand.
+
+    Starts **full**. A process that has just started has, by definition, been
+    silent, and the book's rule is that silence earns burst capacity. Starting
+    empty would also mean the first report of a match waits for no reason.
+    """
 
     capacity: float = float(CONCURRENT_REQUESTS)
     per_minute: float = float(REQUESTS_PER_MINUTE)
@@ -98,7 +133,13 @@ class TokenBucket:
 
 @dataclass
 class Limiter:
-    """The bucket plus the bounded queue the rulebook asks for."""
+    """The bucket plus the bounded queue the rulebook asks for.
+
+    ``queue_depth`` is where backpressure lives. A limiter with an unbounded
+    queue does not limit anything — it converts a rate problem into a memory
+    problem and hides it until the process dies, which is strictly worse than
+    refusing early because the refusal at least names what happened.
+    """
 
     bucket: TokenBucket = field(default_factory=TokenBucket)
     queue_depth: int = QUEUE_DEPTH
@@ -118,7 +159,13 @@ class Limiter:
                 )
 
     def enter(self) -> float:
-        """Join the queue. Returns the seconds to wait before sending."""
+        """Join the queue. Returns the seconds to wait before sending.
+
+        Raises:
+            QueueFull: when the queue is at capacity. This is the limiter
+                working, not failing — a caller that cannot be admitted should
+                be told now rather than after it has waited.
+        """
         if self.waiting >= self.queue_depth:
             raise QueueFull(
                 f"{self.waiting} requests already waiting, queue depth is {self.queue_depth}; "
@@ -137,7 +184,16 @@ class Limiter:
         self.waiting = max(self.waiting - 1, 0)
 
     def backoff_for(self, attempt: int) -> float:
-        """Seconds to wait before retry number ``attempt`` (1-based)."""
+        """Seconds to wait before retry number ``attempt`` (1-based).
+
+        Exponential from the configured base, so a service that is genuinely
+        overloaded is not asked again on the same cadence that overloaded it.
+
+        Raises:
+            RateLimitError: once ``max_retries`` is exhausted. Named rather
+                than returning a sentinel, because "retry forever" is the
+                behaviour FR-7.22 says can get an account suspended.
+        """
         if attempt < 1:
             raise RateLimitError(f"attempts are numbered from 1, got {attempt}")
         if attempt > self.max_retries:

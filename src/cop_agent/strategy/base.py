@@ -1,6 +1,23 @@
 """The strategy module's contract.
 
-BrainBase abstract class, Decision, and strategy exception definitions.
+This is where the grade lives. Everything else in the repository is
+infrastructure both teams must build identically from the same rulebook; the
+brain is the only place one agent can out-think another.
+
+It plugs into the runtime at exactly one point — **after the incoming hint is
+decoded, before the outgoing Commit is packed** — and everything between those
+two points is the agent's intelligence: belief update, action choice, and the
+deception text.
+
+**The move is always chosen here, in Python.** Language models hallucinate in
+Cartesian space: they confuse directions, distances and coordinates, and will
+return an illegal or self-destructive action with complete confidence. The
+model writes text and profiles the opponent's language; the algorithm owns
+every spatial decision.
+
+Two overrides exist because the cop has two kinds of turn. ``_pick_move``
+chooses a relocation; ``_decide_move`` chooses between relocating and
+forfeiting movement to place a barrier. A thief brain needs only the first.
 """
 
 import random

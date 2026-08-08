@@ -1,6 +1,28 @@
 """The belief map: where the hidden opponent probably is.
 
-A probability distribution over every cell, summing to one. Zero on barriers.
+A probability distribution over every cell, summing to one. This is the object
+the policy targets and the GUI heatmap renders, and it must be the *same*
+object for both — a display-only copy would let the picture we show diverge
+from the reasoning we did, which is the one thing the screenshot requirement
+in the submission checklist exists to demonstrate.
+
+**Zero on barriers, always.** Nobody can stand on a sealed cell, so belief
+there is not merely unlikely, it is impossible. That distinction matters
+because the mass has to go somewhere: zeroing without renormalising leaves a
+distribution summing to less than one, and every downstream comparison then
+silently measures a different total. Barriers are permanent and only ever
+accumulate, so this happens repeatedly through a match rather than once.
+
+**Uniform is the honest prior.** Before any evidence, every free cell is
+equally likely. A prior that guessed — weighting the centre, or the opponent's
+start — would be evidence we did not gather, and the belief map's whole job is
+to distinguish what we know from what we assume.
+
+The map deliberately does not know *how* evidence arrives. Scent and hints are
+combined by the Bayes update, which multiplies this distribution by a
+likelihood and renormalises; keeping that out of here means the invariants —
+sums to one, zero on barriers, never negative — are enforced in one place and
+hold no matter what evidence is fed in.
 """
 
 from dataclasses import dataclass, field

@@ -1,4 +1,32 @@
-"""``config_<game_id>_g<NN>.json`` — locked sub-game physics configuration."""
+"""``config_<game_id>_g<NN>.json`` — the physics both sides agreed, locked.
+
+One per sub-game. It carries every quantitative parameter from Appendix F, and
+its whole purpose is that the two copies are **identical**: the same board, the
+same decay, the same barrier quota, the same scoring. A disagreement here is not
+a disagreement about tactics, it is two agents playing different games and
+reporting incompatible results.
+
+So the file is written with its own digest inside it, and the digest is what the
+two peers exchange (#121). Three consequences shape this module:
+
+**The digest covers the parameters, not the file.** ``config_sha256`` is taken
+over the canonical bytes of the parameters alone — never over the object that
+already contains the digest. That is the same rule as the declaration's
+signature, for the same reason: a hash of a document containing its own hash
+cannot be recomputed by anybody, including us.
+
+**Appendix F is checked before anything is locked.** A *fixed* parameter that
+deviates disqualifies the team, and locking a bad value would produce a file
+that is cryptographically perfect and disqualifying. :func:`~..shared.config.validate`
+runs first, so the failure is "this config is illegal" rather than "both sides
+agreed on something that loses the match".
+
+**Loading verifies.** :func:`load` recomputes the digest from the parameters it
+just read and refuses a file whose stored digest does not match. A config file
+is committed to the repository (Appendix F, mandatory rule 4) and therefore
+edited by hand sometimes; a loader that trusted the stored digest would let a
+hand edit travel under a hash that no longer describes it.
+"""
 
 import json
 from dataclasses import dataclass
@@ -77,7 +105,14 @@ def lock(
     parameters: dict[str, Any],
     agreed_between: tuple[str, str],
 ) -> LockedConfig:
-    """Validate against Appendix F, then lock."""
+    """Validate against Appendix F, then lock.
+
+    Raises:
+        ConfigFileError: if the parameters violate Appendix F. Checked *before*
+            locking, so the failure reads as "this config is illegal" rather
+            than producing a cryptographically perfect file that disqualifies
+            the team the moment an auditor opens it.
+    """
     try:
         validate(parameters)
     except ConfigError as exc:

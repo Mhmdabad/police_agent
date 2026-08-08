@@ -1,4 +1,37 @@
-"""``declaration_<game_id>.json`` — fixed pre-game parameters and match declaration."""
+"""``declaration_<game_id>.json`` — everything that does not change during a match.
+
+The pre-game declaration is the fixed point the rest of the evidence hangs from.
+It names who played, which four repositories the code came from, what hardware
+and model ran it, and what token ceiling was agreed — all before a single move,
+and all under one signature. Anything asserted afterwards that contradicts it is
+contradicting a document both sides accepted before either knew the outcome.
+
+**This module builds the file the two teams share.** :mod:`.step_zero` already
+produces our own half — hardware, provenance, signature — which is a statement
+about *this machine*. The declaration is a statement about *this match*, and it
+carries both.
+
+Three decisions worth stating:
+
+**Everything mandatory is required at construction.** FR-7.28 names four
+repository links; the rulebook adds teams and members, MCP addresses, the LLM
+model, the token ceiling and the times. A declaration missing any of them is not
+a weaker declaration, it is a different document — so it cannot be built. The
+error then arrives while somebody is looking at the code that omitted the field,
+rather than at the moment two agents try to agree.
+
+**The signature covers the content and not itself.** :func:`content` and
+:meth:`MatchDeclaration.to_dict` differ by exactly the signature. Keeping them
+apart is what stops a document from being signed over a copy of its own
+signature — which verifies, and means nothing.
+
+**`ended_at` is deliberately mutable and unsigned at declaration time.** It is
+not knowable before the match, and pretending otherwise would either mean
+signing a placeholder or delaying the signature until the evidence it fixes has
+already been produced. It is recorded by :meth:`MatchDeclaration.concluded`,
+which re-signs — so the final file is signed, and the *pre-game* commitment is
+still checkable from the fields that were fixed before play.
+"""
 
 import json
 from dataclasses import dataclass, replace
@@ -6,16 +39,57 @@ from pathlib import Path
 from typing import Any
 
 from ..shared.naming import declaration_filename
-from ._declaration_models import (
-    DeclarationError as DeclarationError,
-)
-from ._declaration_models import (
-    Endpoints as Endpoints,
-)
-from ._declaration_models import (
-    Team as Team,
-)
 from .step_zero import Hardware, Provenance, sign, statement
+
+
+class DeclarationError(ValueError):
+    """Raised when a declaration is missing something the rulebook requires."""
+
+
+@dataclass(frozen=True, slots=True)
+class Team:
+    """One side: who they are, and the two repositories their agents came from."""
+
+    name: str
+    members: tuple[str, ...]
+    cop_repo: str
+    thief_repo: str
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise DeclarationError("a team needs a name")
+        if not self.members:
+            raise DeclarationError(f"team {self.name!r} declares no members")
+        for label, url in (("cop_repo", self.cop_repo), ("thief_repo", self.thief_repo)):
+            if not url:
+                raise DeclarationError(
+                    f"team {self.name!r} has no {label}; FR-7.28 requires four repository "
+                    "links in total, and a result that cannot be traced to code is not one"
+                )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "members": list(self.members),
+            "cop_repo": self.cop_repo,
+            "thief_repo": self.thief_repo,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class Endpoints:
+    """Where the two MCP servers were reachable when the match was declared."""
+
+    ours: str
+    theirs: str
+
+    def __post_init__(self) -> None:
+        for label, url in (("ours", self.ours), ("theirs", self.theirs)):
+            if not url:
+                raise DeclarationError(f"the {label} MCP address is empty")
+
+    def to_dict(self) -> dict[str, str]:
+        return {"ours": self.ours, "theirs": self.theirs}
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +161,13 @@ class MatchDeclaration:
         return declaration_filename(self.game_id)
 
     def concluded(self, ended_at: str, key: str | None) -> "MatchDeclaration":
-        """A copy with the end time filled in, re-signed."""
+        """A copy with the end time filled in, re-signed.
+
+        Returns a new declaration rather than mutating this one. The pre-game
+        document and the concluded one are different statements signed at
+        different moments, and keeping both means the end time cannot be
+        mistaken for something that was fixed before play.
+        """
         if not ended_at:
             raise DeclarationError("concluded() needs an end time")
         return declare_match(replace(self, ended_at=ended_at, signature=""), key)
@@ -101,7 +181,13 @@ class MatchDeclaration:
 
 
 def declare_match(declaration: MatchDeclaration, key: str | None) -> MatchDeclaration:
-    """Sign a declaration with the Step-0 key, or mark it unsigned."""
+    """Sign a declaration with the Step-0 key, or mark it unsigned.
+
+    Uses :func:`~.step_zero.sign`, so there is one signing rule in the project
+    rather than two that agree until they do not. A missing key produces
+    ``"unsigned"`` — explicitly, because an empty signature is a value that
+    *verifies* and would claim an authenticity nobody granted.
+    """
     return replace(declaration, signature=sign(declaration.content(), key))
 
 

@@ -1,4 +1,39 @@
-"""Gate one of the Gatekeeper: daily send count and hard ceiling on disk."""
+"""Gate one of the Gatekeeper: how many sends today, and the day's hard ceiling.
+
+FR-7.18 calls this the **last line of defence against account suspension**. The
+threat it answers is stated plainly in the rulebook: automation hands code — which
+may contain a bug — the key to a live mail account, and the question is what
+happens when an infinite loop starts firing thousands of messages a minute.
+
+Two design decisions follow directly from that threat, and both are the opposite
+of what the obvious implementation does.
+
+**The count is on disk, not in memory.** A counter held in a process is defeated
+by the precise failure it exists to stop. A bug that sends and then crashes takes
+the counter with it; systemd, a shell loop or an impatient human restarts the
+agent, and the fresh process believes nothing has been sent today. The loop is
+unbounded and the quota manager watched it happen. Only a count that outlives the
+process is a count at all.
+
+**Reservation happens before the send, never after.** Recording a send once it
+succeeds sounds tidier and is exactly wrong: a send that goes out and then fails
+— a timeout after delivery, a crash between the API call and the write — is
+uncounted but not unsent. Under a crash loop every attempt is uncounted, and the
+ceiling is never reached no matter how much mail leaves. So a slot is taken
+first; if the send then fails, we have overcounted by one, which costs at worst a
+single report and cannot cost the account.
+
+**A ledger that cannot be read fails closed.** If we cannot say how many sends
+happened today, we cannot say we are under the ceiling, and the whole point of a
+last line of defence is that it does not yield to uncertainty. Corruption would
+otherwise be a bypass: damage the file, get an unlimited day. Clearing it is a
+deliberate human act — :func:`reset` — rather than something the failure path
+does for itself.
+
+The day boundary is UTC, so it does not move with the machine's timezone or with
+daylight saving. A ceiling that shifts by an hour twice a year is a ceiling that
+is wrong twice a year.
+"""
 
 import json
 import os
@@ -101,7 +136,11 @@ class Quota:
         return max(self.limit - self.used(), 0)
 
     def check(self) -> None:
-        """Raise if a send now would cross the ceiling, without taking a slot."""
+        """Raise if a send now would cross the ceiling, without taking a slot.
+
+        Separate from :meth:`reserve` so a caller can report the state — a
+        status line, a dry run — without spending anything.
+        """
         used = self.used()
         if used >= self.limit:
             raise QuotaExhausted(
@@ -112,7 +151,18 @@ class Quota:
             )
 
     def reserve(self, count: int = 1) -> int:
-        """Take ``count`` slots **before** sending, and return the new total."""
+        """Take ``count`` slots **before** sending, and return the new total.
+
+        Called before the API request, not after. A send that goes out and then
+        fails is uncounted but not unsent, and under a crash loop that is every
+        send. Overcounting by one costs a report; undercounting costs the
+        account.
+
+        Raises:
+            QuotaExhausted: if the reservation would cross the ceiling. Nothing
+                is written in that case, so a refused reservation does not burn
+                the slot it was refused.
+        """
         if count < 1:
             raise QuotaError(f"a reservation must be for at least one send, got {count}")
         current = self._read()

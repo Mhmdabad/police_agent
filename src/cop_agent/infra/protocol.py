@@ -1,6 +1,22 @@
 """The wire format, as the cohort speaks it.
 
-TurnMessage, AuditPayload, ControlMessage definitions and parsers.
+These shapes are **not ours to choose**. They match the course reference
+implementation, which ships with the book and is the only thing resembling a
+shared standard across the cohort. A better protocol nobody speaks is worthless.
+
+Two properties are worth stating because they differ from what we built first:
+
+**One message carries a whole turn.** Hint, scent, commitment, barrier
+declaration and capture claim travel together in a single ``TurnMessage``, one
+round trip per turn — rather than being split across separate calls. That is
+also closer to what the rulebook describes.
+
+**The turn token travels with the message.** Receiving a ``TurnMessage`` *is*
+what makes it your turn. There is no separate handoff to get out of step with.
+
+Validation lives here rather than on the far side. The reference validates
+nothing, so accepting its format costs us nothing in safety: we parse strictly,
+refuse what we cannot trust, and remain wire-compatible.
 """
 
 from dataclasses import asdict, dataclass, field

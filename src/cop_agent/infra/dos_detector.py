@@ -1,6 +1,48 @@
 """Gate three: recognising a bug, and locking the door on it.
 
-Anomalous send pattern detection and circuit breaker disk lock.
+Gates one and two are arithmetic. The quota counts, the bucket meters, and both
+would let a broken agent send steadily forever — the bucket in particular is
+*designed* to allow a sustained 30 a minute, which is exactly what an infinite
+loop produces. Neither can tell a busy day from a defect.
+
+FR-7.20 asks for the gate that can: recognise an anomalous send *pattern*, then
+**lock API access entirely**, sacrificing one report to save the account. It is
+backpressure plus a circuit breaker, and the phrase worth keeping is *sacrificing
+one report*. Losing a match's points is a bad afternoon; losing the account is
+the project.
+
+**What "anomalous" means here.** Not volume — volume is what the other two gates
+are for. The signal is *regularity*. A person, or an agent playing matches, sends
+in clumps with irregular gaps: a report at the end of one game, another twenty
+minutes later. A loop sends with the spacing of its own iteration, and that
+spacing is suspiciously even. So the detector watches the **variation** in the
+intervals between sends, and trips when a burst arrives too evenly to be a
+sequence of real events.
+
+Two independent triggers, because a bug can be fast or merely relentless:
+
+* **burst** — more than ``burst_limit`` sends inside ``window_sec``;
+* **metronome** — a run of sends whose intervals are nearly identical, which is
+  what code does and people do not.
+
+The two read the same history over **different spans**, and that is deliberate.
+The burst rule asks "how many just now", so it counts inside ``window_sec``. The
+cadence rule asks "what shape", and a slow loop — one send every few minutes,
+forever — never puts enough samples inside a one-minute window to have a shape
+at all. Windowing the history before measuring cadence would leave the metronome
+trigger able to see only fast patterns, which the burst rule already catches, and
+blind to the relentless-but-slow loop it exists for.
+
+**The lock does not expire.** A circuit breaker that half-opens after a timeout
+is right for a flaky dependency and wrong here, because the fault is *ours*: the
+loop is still running, and reopening the door hands it the account again. Only
+:meth:`Detector.reset`, called deliberately once somebody has looked, clears it.
+That is the "sacrifice" in the requirement — it is supposed to hurt slightly, or
+it would not be a last resort.
+
+**The lock is on disk**, for the reason the quota ledger is: a detector that
+forgets on restart is defeated by a crash loop, which is one of the shapes the
+bug it hunts actually takes.
 """
 
 import json
@@ -71,7 +113,13 @@ class Detector:
         return str(body.get("reason", "")) if isinstance(body, dict) else ""
 
     def check(self) -> None:
-        """Refuse if the pipeline is locked. Called before anything else."""
+        """Refuse if the pipeline is locked. Called before anything else.
+
+        Raises:
+            DosDetected: always, while locked. There is no timeout and no
+                half-open state: the fault is a bug in this process, and
+                reopening the door while it still runs hands it the account.
+        """
         if self.locked:
             raise DosDetected(
                 f"the send pipeline is locked: {self.reason()}. Nothing goes out until "
@@ -80,7 +128,17 @@ class Detector:
             )
 
     def record(self) -> None:
-        """Note that a send is happening, and lock if the pattern looks mechanical."""
+        """Note that a send is happening, and lock if the pattern looks mechanical.
+
+        Called on every send attempt, before the request. A detector fed only
+        successes cannot see a loop that fails every time, which is the loop
+        most likely to be running.
+
+        Raises:
+            DosDetected: if this send completes an anomalous pattern. The lock
+                is written first, so a caller that ignores the exception still
+                finds the door shut on the next attempt.
+        """
         self.check()
         moment = self.now()
         self.recent.append(moment)

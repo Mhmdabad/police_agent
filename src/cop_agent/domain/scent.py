@@ -1,6 +1,38 @@
 """Scent emission: the signal an agent cannot help leaving.
 
-Emits Euclidean Gaussian (or Chebyshev) falloff centered on agent position.
+Every agent emits on every turn — moving or standing still — a field centred
+on its own cell. This is the stigmergic channel: neither side can suppress it,
+forge it, or emit somewhere it is not, which is what makes it the evidence a
+verbal claim gets checked against. A hint can lie; a trail cannot.
+
+**The falloff is a Euclidean hill, and the rulebook proves it in a figure.**
+Figure 4 (PDF p. 44) prints the whole 5x5 field, and two of its numbers settle
+the shape on their own: ``(1,2)`` and ``(2,1)`` are 0.14 while ``(2,2)`` is
+0.04. Under Chebyshev distance all three are ring 2 and would be equal. They
+are not, so intensity falls with ``dr**2 + dc**2``.
+
+That difference is the mechanism, not a detail. Ch. 4.3 explains the point of
+spreading at all: a single hot cell is a crude measure, while a hill marks
+*direction* even when the exact cell is missed. A square terrace of equal
+border values carries no direction, so flattening the falloff removes the
+reason the field is emitted.
+
+The reference implementation uses Chebyshev, and it is therefore selectable —
+:data:`CHEBYSHEV` — but not the default. The emission model is exchanged and
+**hash-locked before a series** precisely because implementations differ; that
+lock is the resolution procedure, so the honest posture is to default to the
+authoritative source and be able to agree the other.
+
+Three properties are load-bearing for that agreement and each looks cosmetic:
+
+* **Rounding to three decimals at emission.** Floats do not reproduce across
+  implementations; a rounded field does. This is what makes "same formula"
+  mean "same numbers".
+* **Clipping to the board, not wrapping.** A field emitted in a corner is
+  simply smaller, and the centre keeps full intensity.
+* **No barrier awareness.** Scent passes through walls. Barriers block
+  movement, not diffusion, and a plausible-sounding occlusion rule invented
+  here would break the lock without anyone noticing until audit.
 """
 
 import math

@@ -1,6 +1,29 @@
 """Commit-Reveal sealing, in the wire form the cohort uses.
 
-SHA256(canonical_bytes(payload | nonce)) commitment verification and audit.
+Every step a peer seals its true record under
+``commit = SHA256(canonical_json(payload) | nonce)`` and sends **only** the
+commit. Nonces are withheld until the end-of-game audit, where both sides
+re-verify every step — so no position or action can be rewritten afterwards.
+
+**This formula is not ours to choose.** It has to match the opponent's byte for
+byte, or two peers who both played honestly produce a ``TAMPERED`` verdict on a
+clean match — voided, no appeal, zero for both sides. The shape here follows the
+course reference implementation, which is the only thing resembling a shared
+standard across the cohort.
+
+Three details carry that compatibility, and each is easy to get silently wrong:
+
+``ensure_ascii=False``
+    ``json.dumps`` defaults to ``True``, escaping non-ASCII to ``\\uXXXX``.
+    Identical bytes for an English hint, different bytes the moment a hint
+    carries a non-ASCII character — and hints are free natural language.
+
+The nonce is **appended after a pipe**, not folded into the payload
+    ``SHA256(canonical | "|" | nonce)``. Putting it inside the object changes
+    both the canonical string and the digest.
+
+``sort_keys=True`` with tight separators
+    So key order and incidental whitespace cannot change the digest.
 """
 
 import hashlib
@@ -20,17 +43,54 @@ class CryptoError(ValueError):
 
 
 def nonce() -> str:
-    """A fresh 128-bit nonce, from the CSPRNG and never from :mod:`random`."""
+    """A fresh 128-bit nonce, from the CSPRNG and never from :mod:`random`.
+
+    The rulebook names the module: ``secrets``, *not* ``random``, which it
+    calls too predictable. That is not stylistic advice.
+
+    A nonce does two jobs. It makes repeating an action produce a different
+    digest, and it defeats a dictionary attack — the move space is tiny, five
+    moves and a handful of barrier cells, so without a nonce an opponent hashes
+    every possibility and cracks each commitment in microseconds.
+
+    Both jobs need the value to be **unguessable**, and :mod:`random` is
+    reproducible by construction: it is a Mersenne Twister whose entire future
+    follows from its state, and the state follows from enough observed output.
+    A series hands the opponent hundreds of nonces at the final reveal. Anything
+    that lets them predict the next one lets them pre-image our commitments and
+    read our move before we make it — which is the whole thing this mechanism
+    exists to prevent.
+
+    Sixteen bytes because the reference uses sixteen. Collision resistance is
+    not the point at this size — unpredictability is — but a shared length is
+    one less thing for two implementations to disagree about.
+    """
     return secrets.token_hex(NONCE_BYTES)
 
 
 def canonical(payload: dict[str, Any]) -> str:
-    """The canonical JSON text a commitment is taken over."""
+    """The canonical JSON text a commitment is taken over.
+
+    Delegates rather than re-deriving. This module used to serialise with
+    ``ensure_ascii=False`` while :func:`~..shared.config.canonical_bytes` left
+    the default — two canonical forms in one codebase, agreeing on every
+    English payload and disagreeing on the first hint with a non-ASCII
+    character in it.
+    """
     return canonical_bytes(payload).decode("utf-8")
 
 
 def commit_of(payload: dict[str, Any], nonce: str) -> str:
-    """The commitment for ``payload`` under ``nonce``."""
+    """The commitment for ``payload`` under ``nonce``.
+
+    The nonce joins the record as a field and the whole thing is serialised
+    once, which is what the rulebook's ``|`` operator means here.
+
+    Raises:
+        CryptoError: if the payload already carries a ``nonce``. Merging would
+            silently drop one of the two, and the one dropped decides whether
+            the commitment can ever be reopened.
+    """
     if "nonce" in payload:
         raise CryptoError("payload already has a 'nonce'; pass it once, as the argument")
     return hashlib.sha256(canonical_bytes({**payload, "nonce": nonce})).hexdigest()
@@ -78,7 +138,34 @@ def step_record(
     game_uid: str = "series-123",
     sub_game: int = 2,
 ) -> dict[str, Any]:
-    """Everything one step commits to, before the nonce is folded in."""
+    """Everything one step commits to, before the nonce is folded in.
+
+    The four fields the rulebook names, plus the four it says the real record
+    also carries. ``barrier_placed`` is here because a barrier is an action
+    with permanent consequences — it is the one move that changes the board for
+    the rest of the match, and a cop that could re-describe where it built
+    afterwards would have the most valuable rewrite available to either side.
+
+    Only the cop ever passes it. The field is present in both agents anyway, so
+    the two sides serialise the same shape and a thief's ``null`` is a fact
+    about the turn rather than a difference in format.
+
+    **The scent field is sealed too, and it is the whole point of sealing.**
+    The trail is the one witness the rulebook calls unfalsifiable, and it is
+    disclosed a phase later than the commitment — so without binding it here, a
+    peer could read the opponent's reveal and only then decide what trail to
+    claim it had left. Sealed, the field is fixed before anyone has spoken, and
+    a single cell edited afterwards changes the digest and fails the audit.
+
+    Sealed **in full** rather than as a digest of itself. A digest would bind
+    just as tightly and would leave the log unable to prove anything on its
+    own: the Replay App re-hashes the record it finds in the file, and a record
+    naming a field nobody kept is a record a third party cannot check.
+
+    ``None`` is a fact about the turn, not an omission — the key is always
+    present, so the two sides serialise one shape whether or not a series was
+    negotiated with scent binding in force.
+    """
     return {
         "game_uid": game_uid,
         "sub_game": sub_game,

@@ -1,12 +1,35 @@
 """The stamp the Replay App puts on a log, and the walk that earns it.
 
-FR-7.12: green ``Verified OK`` on clean match, red ``TAMPERED`` on alteration.
-FR-7.13: abort walk on first failure.
+FR-7.12 asks for two outcomes: a green ``Verified OK`` on a match, a red
+``TAMPERED`` on any alteration however small, and the match void immediately.
+FR-7.13 adds that the walk aborts on the first failure rather than gathering a
+list — one bad step is already the whole answer, and continuing would only
+produce more detail about a match that no longer exists.
 
-Three outcomes:
+**There are three outcomes here, not two, and the third is the design
+decision.** A step that carries no nonce cannot be re-derived, and stamping
+that ``TAMPERED`` would accuse a team of forgery for a sub-game that ended
+early or a log copied mid-match. So the walk distinguishes:
+
 * every step re-derived and matching → ``Verified OK``;
 * a step that opens and **disagrees** → ``TAMPERED``, void;
-* a step that **cannot be opened** → ``INCOMPLETE``.
+* a step that **cannot be opened** → ``INCOMPLETE``, nothing proven either way.
+
+The obvious worry is that ``INCOMPLETE`` is a hiding place: forge a step, then
+delete its nonce and be un-caught. It is not, because it is not an *acquittal*.
+The only outcome that clears a log is ``Verified OK``, a log with a missing
+nonce never reaches it, and that stamp is what the submission requires. A cheat
+who deletes a nonce has not escaped the check — they have failed it in a way
+that names their own file as unverifiable.
+
+Which of the three applies is decided by :attr:`~.replay.RecordedStep.openable`
+and by the arithmetic, never by reading the text of a reason. Reasons are
+written for a person; branching on them would put a verdict at the mercy of
+a reworded sentence.
+
+This module reports; it does not navigate. ``walk`` leaves the cursor where it
+found it and names the offending step, so a viewer that wants to land there
+calls :meth:`~.replay.Replay.seek` and does so visibly.
 """
 
 from dataclasses import dataclass

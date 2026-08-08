@@ -1,4 +1,38 @@
-"""How long the tunnel actually takes, and what that says about the timeouts."""
+"""How long the tunnel actually takes, and what that says about the timeouts.
+
+``response_timeout_sec`` is 30 seconds by Appendix F. Picking a number and
+hoping is not a justification, and the rulebook asks for the measurement:
+round-trip latency has to be recorded and the timeout defended against it.
+
+**What the timeout is actually covering is the whole argument.** The instinct
+is to add the opponent's thinking time to the network time and check the sum
+fits in 30 seconds — and it does not, because ``step_deadline_seconds`` is 30
+on its own, leaving nothing for the network. That arithmetic would say the
+configuration is broken.
+
+It is not, because the protocol is **fire-and-forget**. An inbound tool call
+validates a message, drops it in a mailbox and returns ``{"ok": True}``. The
+opponent's decision-making happens after the response has gone, on their own
+clock, and their reply travels as a separate push into our server. So the
+response timeout covers *a push and an enqueue* — a network round trip and a
+few microseconds of Python — while the opponent's think time is bounded
+separately by ``turn_timeout_seconds``.
+
+That is why the decoupling in :mod:`.inboxes` is not merely tidy. If a tool
+call blocked while the far side decided its move, every response timeout would
+have to exceed every opponent's worst thinking time, and a peer that thought
+slowly would time out a peer that was working perfectly.
+
+So the number to measure is the round trip, and the number to compare it
+against is 30 seconds — which should turn out to be enormous. Measuring anyway
+is the point: a tunnel that has degraded to seconds per call is a fact worth
+having *before* the match rather than inferring it from a technical loss
+afterwards.
+
+Percentiles are nearest-rank rather than interpolated. With a few dozen samples
+an interpolated p95 reports a duration that never happened, and the honest
+statement is "95% of calls came back within a time we actually observed".
+"""
 
 import math
 import time
@@ -51,7 +85,12 @@ class Summary:
 
     @classmethod
     def of(cls, samples: list[float]) -> "Summary":
-        """Summarise, or report zeroes for an empty log."""
+        """Summarise, or report zeroes for an empty log.
+
+        Zeroes rather than an exception: "we have not measured yet" is a real
+        state at startup, and a summary that raised would have to be guarded at
+        every call site that only wanted to print it.
+        """
         if not samples:
             return cls(0, 0.0, 0.0, 0.0, 0.0)
         ordered = sorted(samples)
@@ -74,7 +113,12 @@ class Summary:
 
 
 def percentile(ordered: list[float], which: int) -> float:
-    """Nearest-rank percentile of an already-sorted list."""
+    """Nearest-rank percentile of an already-sorted list.
+
+    Nearest-rank returns an observation that actually occurred. Interpolating
+    between two samples invents a duration nothing took, and a timeout defended
+    with a number nobody measured is not a defence.
+    """
     if not ordered:
         return 0.0
     rank = max(1, math.ceil(which / 100 * len(ordered)))
@@ -90,7 +134,12 @@ class Justification:
 
     @property
     def headroom(self) -> float:
-        """How many times the observed p95 fits into the timeout."""
+        """How many times the observed p95 fits into the timeout.
+
+        Infinite when nothing has been measured or every call was instant —
+        which is honest. An unmeasured timeout is not *thin*, it is unjustified,
+        and :attr:`sufficient` is the property that says so.
+        """
         return math.inf if self.summary.p95 <= 0 else self.timeout_sec / self.summary.p95
 
     @property
@@ -125,7 +174,14 @@ def justify(log: LatencyLog, timeout_sec: float = DEFAULT_RESPONSE_TIMEOUT_SEC) 
 
 
 class TimedTransport:
-    """Wraps a transport and times every call."""
+    """Wraps a transport and times every call.
+
+    A decorator rather than timing inside :class:`~.mcp_client.OpponentClient`,
+    so that what is measured is unambiguously the network round trip and not
+    the retry loop wrapped around it. Timing the outer loop would fold four
+    failed attempts and two backoff sleeps into a single "round trip" and make
+    the tunnel look far worse than it is.
+    """
 
     def __init__(
         self,
@@ -138,7 +194,12 @@ class TimedTransport:
         self._clock = clock
 
     def call(self, url: str, tool: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
-        """Time one call."""
+        """Time one call. A failed call is not recorded as a round trip.
+
+        A connection refused returns in microseconds and would drag the median
+        toward zero, making a dying tunnel look like a fast one — the opposite
+        of what the measurement is for.
+        """
         started = self._clock()
         result: dict[str, Any] = self.inner.call(url, tool, payload, timeout)
         self.log.record(tool, self._clock() - started)

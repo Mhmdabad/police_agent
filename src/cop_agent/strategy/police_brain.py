@@ -1,6 +1,27 @@
 """The cop's decision-making.
 
-Pursue target by Manhattan distance, breaking ties by containment value.
+Pursue the target by Manhattan distance, breaking ties by **containment
+value** rather than by position.
+
+Distance alone decides where to step but not which of several equally close
+steps is worth taking, and those are not equivalent. The rulebook's real
+objective for this agent is not *chase the thief* but *shrink the space the
+thief has*: enclosure costs two barriers in a corner, three on an edge and
+four in open board, so herding matters more than closing.
+
+The tie-break scores a candidate by how much it reduces the thief's reachable
+area, falling back to proximity to the board edge when reachability cannot
+separate them. Both are cheap and both point the pursuit the same way.
+
+The cop has a second kind of turn. :meth:`PoliceBrain._decide_move` chooses
+between relocating and forfeiting movement to place a barrier, in a fixed
+order that reflects what each check costs to get wrong:
+
+1. a placement that **wins outright** this turn, taken before anything else
+   is consulted, because neither escape area nor our own mobility means
+   anything once the match is over;
+2. otherwise the best move and the best permitted placement are weighed
+   against each other, with both sides of the comparison written to the log.
 """
 
 import logging
