@@ -8,12 +8,23 @@ here, directly from the state, so that no code path exists which could assert a
 capture the board does not show.
 """
 
-from enum import Enum
-
 from ..shared.appendix_f import book_int
 from .axes import AxisConvention
 from .board import BoardState, Position
+from .outcome_technical import TechnicalLoss, technical_loss_scores
 from .rules import blocked_neighbours
+
+__all__ = [
+    "DEFAULT_SURVIVAL_THRESHOLD",
+    "TechnicalLoss",
+    "capture_claim",
+    "claim_is_supported",
+    "is_capture_by_overlap",
+    "is_enclosure_capture",
+    "is_survival",
+    "is_trapping_capture",
+    "technical_loss_scores",
+]
 
 
 def is_capture_by_overlap(state: BoardState) -> bool:
@@ -82,38 +93,6 @@ def is_survival(
     if is_enclosure_capture(state, axes):
         return False
     return state.step >= survival_threshold
-
-
-class TechnicalLoss(Enum):
-    """Why a sub-game was voided.
-
-    A technical loss scores **zero for both sides**, regardless of the board.
-    That symmetry is deliberate: it removes any incentive to win by stalling,
-    and it means a dropped tunnel destroys a winning position just as surely as
-    a losing one. Protocol hygiene is therefore worth more than any single
-    board advantage.
-    """
-
-    CRASH = "crash"
-    """A peer stopped responding or exited unexpectedly."""
-
-    TIMEOUT = "timeout"
-    """A deadline expired. A missed deadline is a failure, not a reason to wait."""
-
-    FORGERY = "forgery"
-    """A commitment did not match its reveal. Proven tampering, no appeal."""
-
-    ILLEGAL_ACTION = "illegal_action"
-    """An action violated the physics both peers enforce."""
-
-
-def technical_loss_scores() -> tuple[int, int]:
-    """Points awarded on a technical loss, as ``(cop, thief)``.
-
-    Zero for both. Not a parameter: Appendix F marks it **fixed**, and
-    deviating from a fixed value disqualifies the team.
-    """
-    return (0, 0)
 
 
 def capture_claim(state: BoardState, axes: AxisConvention) -> Position | None:
