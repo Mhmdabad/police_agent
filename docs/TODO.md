@@ -6,40 +6,61 @@ open stage *n+1* before every gate in stage *n* is ticked.
 
 Legend: `[ ]` open · `[~]` in progress · `[x]` done · **🚪 GATE** = milestone
 
+> **Status: stages 0–7 are built and tested; league play and submission are
+> what remain.** This matches the Status table in `README.md`. The open boxes
+> below are the honest remainder: real-tunnel latency figures, two counted
+> matches against other teams, screenshots, team member names, the submission
+> tag, the Moodle paperwork, and the two Stage-4 wiring gaps recorded there.
+
 ---
 
 ## Stage 0 — Repository setup
 
-- [ ] `README.md`: academic report skeleton + **cross-link to the thief repo**
-- [ ] `.gitignore` **before the first commit**: `credentials.json`, `token.json`,
+- [x] `README.md`: academic report skeleton + **cross-link to the thief repo**
+- [x] `.gitignore` **before the first commit**: `credentials.json`, `token.json`,
       `*.env`, `config/**/secrets*`, `token*.json`
 - [ ] Repo made accessible to the lecturer (public, or private + shared with `rmisegal@gmail.com`)
-- [ ] `config/` directory with `game.json` (shared) and `police/game.toml` (private)
-- [ ] Python project scaffold (`uv` / `pyproject.toml`), `pytest` wired up
-- [ ] Branch-per-feature workflow agreed; merge to main only when stable
-- [ ] 8-character group identifier (no spaces) chosen and recorded
+      — cannot be verified from the working tree; confirm on GitHub
+- [x] `config/` directory with `game.json` (shared) and `police/game.toml` (private)
+- [x] Python project scaffold (`uv` / `pyproject.toml`), `pytest` wired up
+- [x] Branch-per-feature workflow agreed; merge to main only when stable
+      (`CONTRIBUTING.md` — branch per issue, squash merge)
+- [x] 8-character group identifier (no spaces) chosen and recorded (`s82kma9e`)
 
 ---
 
 ## Stage 1 — Base Logic → [PRD-1](prd/PRD-1-base-logic.md)
 
-- [ ] `BoardState` model (immutable), `Position`, `Move`, `Barrier` types
-- [ ] Coordinate system: origin `top-left`, index from `0`, both configurable
-- [ ] `legal_moves()` — N/S/E/W/STAY, **no diagonals**, no barriers, no off-board
-- [ ] Transition function returning a new state
-- [ ] Barrier placement: only on a turn where movement is forfeited
-- [ ] Barrier placement: only on own cell or a 4-orthogonal neighbour
-- [ ] Barrier model: irreversible, impassable for both, quota `max_barriers` = 14
-- [ ] Reachability / flood-fill query exposed for the strategy layer
-- [ ] Capture: coordinate overlap
-- [ ] Capture: **barrier placed on the thief's cell** (trapping win)
-- [ ] Capture: **thief with no legal move at all** (enclosure win)
-- [ ] Survival: `survival_threshold` = 35 valid steps → 5/10 scoring
-- [ ] Technical loss → 0/0
-- [ ] Scoring table wired from config (capture 20/5, survival 5/10, tie 2)
-- [ ] Config loader + **Appendix F validator** (fixed = exact, minimum = ≥)
-- [ ] Per-match config naming `config_<game_id>_g<NN>.json`, committed to repo
-- [ ] Tests: legality, barrier legality + quota, both capture variants, survival, scoring
+- [x] `BoardState` model (immutable), `Position`, `Move`, `Barrier` types
+      (`domain/board.py` — frozen dataclasses)
+- [x] Coordinate system: origin `top-left`, index from `0`, both configurable
+      (`domain/axes.py`)
+- [x] `legal_moves()` — N/S/E/W/STAY, **no diagonals**, no barriers, no off-board
+      (`domain/rules.py`)
+- [x] Transition function returning a new state (`rules.apply_move`)
+- [x] Barrier model: irreversible, impassable for both, quota `max_barriers` = 14
+      (`domain/actions.py`)
+- [x] Barrier placement: only on a turn where movement is forfeited
+      (`domain/actions.py` — a turn is exactly one action)
+- [x] Barrier placement: only on own cell or a 4-orthogonal neighbour
+      (`actions.placement_range`)
+- [x] Capture: coordinate overlap (`domain/outcome.py`)
+- [x] Reachability / flood-fill query exposed for the strategy layer
+      (`domain/search.py:reachable` / `reachable_area`)
+- [x] Capture: **barrier placed on the thief's cell** (trapping win)
+      (`outcome.is_trapping_capture`)
+- [x] Capture: **thief with no legal move at all** (enclosure win)
+      (`outcome.is_enclosure_capture`)
+- [x] Survival: `survival_threshold` = 35 valid steps → 5/10 scoring
+- [x] Technical loss → 0/0 (`outcome.technical_loss_scores`)
+- [x] Scoring table wired from config (capture 20/5, survival 5/10, tie 2)
+      (`domain/scoring.py`, values via `shared/appendix_f.py`)
+- [x] Config loader + **Appendix F validator** (fixed = exact, minimum = ≥)
+      (`shared/config.py`, `shared/config_validation.py`, `shared/appendix_f.py`)
+- [x] Per-match config naming `config_<game_id>_g<NN>.json` (`shared/naming.py`)
+      — committing one per counted match is still open, see Submission
+- [x] Tests: legality, barrier legality + quota, both capture variants, survival, scoring
+      (`tests/test_rules.py`, `test_scoring.py`, `test_stage1_acceptance.py`)
 - **🚪 GATE:** two agents move legally on the grid; over-quota barrier rejected;
   coordinate overlap triggers capture; a full race runs to termination
 
@@ -47,21 +68,35 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · **🚪 GATE** = milesto
 
 ## Stage 2 — FastMCP Infrastructure → [PRD-2](prd/PRD-2-mcp-infrastructure.md)
 
-- [ ] FastMCP server instance, `mcp.run(transport="http", host="0.0.0.0", port=my_port)`
-- [ ] Client engine calling the opponent's tools at `opponent_url`
-- [ ] Tools: `handshake`, `negotiate_config`, `receive_move`, `get_state_digest`, `ping`
-- [ ] Tool: `declare_barrier(position, step)` — truthful, exact, every placement
-- [ ] Tool: `capture_claim(step)`
-- [ ] Input validation on every tool — never trust an unverified move
-- [ ] **Orchestrator** as single gateway to all five subsystems
-- [ ] `GamePhaseMachine` with the transition table; illegal transition raises
-- [ ] **Deadline Tracker**: timestamp + expiry on every request, controlled retry
-- [ ] **Watchdog**: heartbeat monitor, state persistence, controlled shutdown
-- [ ] Turn scheduler with strict alternation
-- [ ] **Separation audit**: cop and thief in separate processes, separate config
-      dirs, zero shared memory/modules/variables
-- [ ] Tests: no placement path bypasses declaration; illegal transition; opponent
-      killed mid-turn; watchdog freeze
+- [x] FastMCP server instance, `mcp.run(transport="http", host="0.0.0.0", port=my_port)`
+      (`infra/mcp_server.py`)
+- [x] Client engine calling the opponent's tools at `opponent_url`
+      (`infra/mcp_client.py`, `infra/mcp_transport.py`)
+- [x] Tools: `handshake`, `negotiate_config`, `receive_move`, `get_state_digest`, `ping`
+      — shipped as four tools instead: `negotiate` (greeting, config digest, scent
+      lock and result claim all arrive here), `receive_turn`, `submit_audit`,
+      `receive_control` (`infra/inboxes_keys.py:TOOL_NAMES`)
+- [x] Tool: `declare_barrier(position, step)` — truthful, exact, every placement
+      — carried as the `barrier_placed` field of the sealed turn message rather
+      than a separate tool (`infra/protocol.py`, `infra/ceremony_reveal.py`)
+- [x] Tool: `capture_claim(step)` — carried as the `capture_claim` field of the
+      same message (`infra/protocol.py`, `domain/outcome.py:capture_claim`)
+- [x] Input validation on every tool — never trust an unverified move
+      (`infra/validation.py`, `validation_shapes.py`)
+- [x] **Orchestrator** as single gateway to all five subsystems
+      (`runtime/orchestrator*.py`)
+- [x] `GamePhaseMachine` with the transition table; illegal transition raises
+      (`runtime/state_machine.py`)
+- [x] **Deadline Tracker**: timestamp + expiry on every request, controlled retry
+      (`runtime/deadline.py`)
+- [x] **Watchdog**: heartbeat monitor, state persistence, controlled shutdown
+      (`runtime/watchdog.py`)
+- [x] Turn scheduler with strict alternation (`runtime/scheduler.py`)
+- [x] **Separation audit**: cop and thief in separate processes, separate config
+      dirs, zero shared memory/modules/variables (`tests/test_separation_audit.py`)
+- [x] Tests: no placement path bypasses declaration; illegal transition; opponent
+      killed mid-turn; watchdog freeze (`tests/test_stage2_resilience.py` —
+      `TestBarrierDeclarationCannotBeBypassed`)
 - **🚪 GATE:** a geometric message from agent A over localhost is received and
   parsed correctly by agent B
 
@@ -69,23 +104,35 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · **🚪 GATE** = milesto
 
 ## Stage 3 — Blind Strategy → [PRD-3](prd/PRD-3-blind-strategy.md)
 
-- [ ] `PoliceBrain(BrainBase)` with `_pick_move` **and `_decide_move`** (barrier),
+- [x] `PoliceBrain(BrainBase)` with `_pick_move` **and `_decide_move`** (barrier),
       selectable via `[strategy] police_class`
-- [ ] Insertion point verified: after hint decode, before Commit pack
-- [ ] Manhattan distance evaluation; **minimise** distance to the target
-- [ ] Tie-break by containment value (escape-area reduction / edge proximity)
-- [ ] Barrier value scorer: escape-area reduction, chain completion, self-penalty
-- [ ] **Self-preservation constraint**: reject placements that disconnect us from
-      the target region
-- [ ] Barrier budget curve + 2–3 barrier endgame reserve
-- [ ] Take a one-placement-away trapping or enclosure win when available
-- [ ] Movement-forfeit cost comparison before every placement
-- [ ] Legality guard: policy output re-validated against PRD-1 rules
-- [ ] Determinism: seeded randomness, seed logged
-- [ ] Decision on movement policy route recorded for the README (heuristic / own
-      algorithm / RL) with justification
-- [ ] Tests: never-illegal property test; self-wall-off regression board;
-      quota never exceeded; determinism
+      (`strategy/police_brain.py`, `strategy/loader.py`)
+- [x] Insertion point verified: after hint decode, before Commit pack
+      (`runtime/subgame_commit.py`; `tests/test_driver_strategy.py`)
+- [x] Manhattan distance evaluation; **minimise** distance to the target
+      (`strategy/police_brain_pursuit.py`)
+- [x] Tie-break by containment value (escape-area reduction / edge proximity)
+      (`police_brain_pursuit._edge_pressure`, `strategy/barriers_geometry.py`)
+- [x] Barrier value scorer: escape-area reduction, chain completion, self-penalty
+      (`strategy/barriers_score.py`, `barriers_geometry.py`)
+- [x] **Self-preservation constraint**: reject placements that disconnect us from
+      the target region (`barriers_geometry.still_reaches`,
+      `BarrierScore.disconnects`; `tests/test_barriers.py:TestSelfPreservationConstraint`)
+- [x] Barrier budget curve + 2–3 barrier endgame reserve
+      (`strategy/budget.py` — `RESERVE = 3`, `required_value(concentration)`)
+- [x] Take a one-placement-away trapping or enclosure win when available
+      (`strategy/barriers_win.py`; `tests/test_barriers.py:TestOnePlacementWin`)
+- [x] Movement-forfeit cost comparison before every placement
+      (`strategy/tradeoff.py:weigh`; `tests/test_tradeoff.py`)
+- [x] Legality guard: policy output re-validated against PRD-1 rules
+      (`strategy/base.py:_guard`)
+- [x] Determinism: seeded randomness, seed logged (`tests/test_determinism.py`)
+- [x] Decision on movement policy route recorded for the README (heuristic / own
+      algorithm / RL) with justification (`README.md` section 3, and section 4
+      states explicitly that RL was not used)
+- [x] Tests: never-illegal property test; self-wall-off regression board;
+      quota never exceeded; determinism (`tests/test_stage3.py`,
+      `tests/test_barriers.py`, `tests/test_determinism.py`)
 - **🚪 GATE:** given a known target position, the agent computes and executes the
   shortest pursuit path with no manual intervention
 
@@ -113,34 +160,65 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · **🚪 GATE** = milesto
       out-of-range or over-limit field is an audit failure
 - [x] Fail-closed: a peer that cannot bind its scent is refused rather than
       believed — unverified scent is never absorbed
-- [ ] Bayes update combining scent evidence + hint, with reliability coefficient
-- [ ] Adaptive reliability: lower on each detected contradiction
-- [ ] Lie detector: expected-vs-measured scent contradiction (reproduce book example)
-- [ ] Re-aim pursuit toward the true scent source after a detected lie
-- [ ] Handle split probability mass (two foci) without oscillating
-- [ ] Belief-weighted barrier scoring
-- [ ] Natural-language hint parser (**no numeric-coordinate protocol** — forbidden)
-- [ ] Hint generator with `hint_max_words` = 15 cap and `map_area` landmarks
-- [ ] **`Intent` flag** (`truth`/`lie`) chosen before sending
-- [ ] **Self-consistency guard**: reject any hint contradicting our own emitted field
-- [ ] LLM providers: `template` (default, 0 tokens), `ollama`, `claude_api`, `claude_cli`
-- [ ] `every_n_steps` throttle; `step_deadline_seconds` = 30 cap with template fallback
-- [ ] Token metering
+- [x] Bayes update combining scent evidence + hint, with reliability coefficient
+      (`domain/inference.py:update(claim=…, reliability=…)`)
+- [x] Adaptive reliability: lower on each detected contradiction
+      (`domain/credibility.py:Credibility.observe`)
+- [x] Lie detector: expected-vs-measured scent contradiction (reproduce book example)
+      (`domain/credibility_verdict.py`; `tests/test_credibility.py` reproduces PDF p. 47)
+- [x] Handle split probability mass (two foci) without oscillating
+      (`domain/foci.py:Commitment`, `foci_clusters.py`)
+- [x] Re-aim pursuit toward the true scent source after a detected lie
+      (`strategy/pursuit.py:reaim`, `domain/credibility.py:true_source`)
+- [x] Belief-weighted barrier scoring (`concentration` from the belief is fed to
+      `strategy/tradeoff.py:weigh` and `strategy/budget.py:required_value`;
+      `tests/test_barriers.py:TestBeliefWeightedValue`)
+- [x] Natural-language hint parser (**no numeric-coordinate protocol** — forbidden)
+      (`domain/hints.py`, `CoordinateProtocolError`)
+- [x] Hint generator with `hint_max_words` = 15 cap and `map_area` landmarks
+      (`domain/hints_lexicon.py:LANDMARKS`, `domain/bluff_phrasing.py`)
+- [x] **`Intent` flag** (`truth`/`lie`) chosen before sending (`domain/bluff_intent.py`)
+- [x] **Self-consistency guard**: reject any hint contradicting our own emitted field
+      (`domain/bluff_vetting.py`)
+- [x] LLM providers: `template` (default, 0 tokens), `ollama`, `claude_api`, `claude_cli`
+      (`domain/providers.py:Bluffer`)
+- [x] `every_n_steps` throttle; `step_deadline_seconds` = 30 cap with template fallback
+      (`domain/budgeting.py:Ration`)
+- [x] Token metering (`infra/token_ledger.py`)
+- [ ] **Wire the received hint into the belief.** `runtime/subgame.py` stores
+      `received_hints`, but nothing reads them: `subgame_scent._observe` calls
+      `inference.update` with the scent field only. Parse the hint, run it past
+      `Credibility`, and pass it as `claim=` / `reliability=`.
+      `strategy/pursuit.py:reaim` is the function that does all of this and it
+      has no caller outside `tests/test_pursuit.py`.
+- [ ] **Wire the hint generator into the live loop.** `strategy/base.py:_hint`
+      returns a constant string, so `Intent`, `bluff_vetting`, `Bluffer`, `Ration`
+      and `TokenLedger` never execute during a match.
 - **🚪 GATE:** free-language report → inference; scent map updates and decays each
   step; LLM produces a hint (truth or lie) within the word cap
+  — *scent half observed end-to-end; the verbal half is module-complete but not
+  yet on the live path (the two boxes above).*
 
 ---
 
 ## Stage 5 — Cloud Exposure → [PRD-5](prd/PRD-5-tunneling.md)
 
-- [ ] ngrok / Localtonet tunnel exposing the FastMCP server publicly
-- [ ] Public URL exchanged in handshake, recorded in the declaration file
-- [ ] `opponent_url` switched from localhost to the public tunnel URL
+- [x] ngrok / Localtonet tunnel exposing the FastMCP server publicly
+      (`infra/tunnel.py`, `tunnel_ngrok.py`; real URLs recorded in
+      `artefacts/declaration_warmup-01.json`)
+- [x] Public URL exchanged in handshake, recorded in the declaration file
+- [x] `opponent_url` switched from localhost to the public tunnel URL
+      (`OPPONENT_URL` / `PUBLIC_URL` override the private config — see `docs/TUNNELING.md`)
 - [x] Re-handshake path for a changed tunnel URL between sub-games
 - [ ] Latency measured; `response_timeout_sec` justified against real round-trips
-- [ ] Retry policy applied to transport failures only — never to re-send an action
-- [ ] Transport event logging (connect / timeout / retry / reconnect)
-- [ ] Tunnel-drop test → controlled technical result, no hang
+      — `infra/latency.py` and `docs/LATENCY.md` are ready, but the measurement
+      table still reads *Not yet measured* and `justify()` reports `UNJUSTIFIED`
+- [x] Retry policy applied to transport failures only — never to re-send an action
+      (`infra/mcp_client_retry.py`)
+- [x] Transport event logging (connect / timeout / retry / reconnect)
+      (`infra/transport_log.py`)
+- [x] Tunnel-drop test → controlled technical result, no hang
+      (`tests/test_stage5_tunnel_drop.py`)
 - **🚪 GATE:** an agent on a **remote machine** connects via ngrok and plays a full
   round against the local agent
 
@@ -148,24 +226,34 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · **🚪 GATE** = milesto
 
 ## Stage 6 — Cryptography → [PRD-6](prd/PRD-6-crypto-commit-reveal.md)
 
-- [ ] Nonce generator: `secrets.token_hex(16)` (**never** `random`)
-- [ ] Canonical JSON serialisation (`sort_keys=True`, `separators=(",",":")`)
-- [ ] `H_commit = SHA256(State ‖ Move ‖ Intent ‖ Nonce)` over the full step record
-      (including barrier placement)
-- [ ] Phase 1 Commit — hash only crosses the wire
-- [ ] Phase 2 Acknowledge — opponent confirms lock
-- [ ] Phase 3 Reveal — action + hint, **nonce stays hidden**
-- [ ] Phase 4 Final Reveal / Audit — all nonces at end of match
-- [ ] Verification with `secrets.compare_digest`; mismatch ⇒ `TECHNICAL_LOSS`
-- [ ] Append-only log `log_<game_id>_g<NN>.json` with commit/reveal/nonce per step
-- [ ] **Capture Claim guard**: no path emits a claim unsupported by `BoardState`
-- [ ] Audit re-verifies every declared barrier against the committed one
-- [ ] `Step-0`: OS, CPU cores/freq, RAM, GPU/VRAM, LLM model name
-- [ ] `Step-0`: code version, team name, sub-game number, **GitHub commit hash**
-- [ ] Step-0 declaration signed with the pre-supplied key
-- [ ] Token consumption metered and cryptographically locked
-- [ ] Cross-implementation fixture test: both peers hash byte-identical payloads
-- [ ] Tests: corrupted reveal detected; nonce never leaked early; audit passes clean
+- [x] Nonce generator: `secrets.token_hex(16)` (**never** `random`) (`domain/crypto.py`)
+- [x] Canonical JSON serialisation (`sort_keys=True`, `separators=(",",":")`)
+- [x] `H_commit = SHA256(State ‖ Move ‖ Intent ‖ Nonce)` over the full step record
+      (`domain/crypto_record.py:step_record`, `crypto.commit_of`)
+- [x] Phase 1 Commit — hash only crosses the wire (`infra/ceremony_commit.py`)
+- [x] Phase 2 Acknowledge — opponent confirms lock (`infra/ceremony_ack.py`)
+- [x] Phase 3 Reveal — action + hint, **nonce stays hidden** (`infra/ceremony_reveal.py`)
+- [x] Phase 4 Final Reveal / Audit — all nonces at end of match (`infra/ceremony_final.py`)
+- [x] Verification with `secrets.compare_digest`; mismatch ⇒ `TECHNICAL_LOSS`
+- [x] Append-only log `log_<game_id>_g<NN>.json` with commit/reveal/nonce per step
+      (including barrier placement) (`infra/match_log.py`)
+- [x] **Capture Claim guard**: no path emits a claim unsupported by `BoardState`
+      (`domain/outcome.py:capture_claim` / `answer_is_supported`)
+- [x] Audit re-verifies every declared barrier against the committed one
+      (`tests/test_barrier_audit.py`)
+- [x] `Step-0`: OS, CPU cores/freq, RAM, GPU/VRAM, LLM model name
+      (`infra/step_zero_hardware.py`)
+- [x] `Step-0`: code version, team name, sub-game number, **GitHub commit hash**
+      (`infra/step_zero_provenance.py`)
+- [x] Step-0 declaration signed with the pre-supplied key
+      (`infra/step_zero_signing.py`; the field reads `"unsigned"` until the course
+      issues the key — a deliberate refusal to fake a signature)
+- [x] Token consumption metered and cryptographically locked
+      (`infra/token_ledger.py:seal` / `commit` / `disclose`)
+- [x] Cross-implementation fixture test: both peers hash byte-identical payloads
+      (`tests/test_interop_fixture.py`, `tests/fixtures/`)
+- [x] Tests: corrupted reveal detected; nonce never leaked early; audit passes clean
+      (`tests/test_stage6_acceptance.py`)
 - **🚪 GATE:** a move is committed then revealed with a valid nonce; Step-0 verifies
   hardware and commit hash on both sides
 
@@ -198,6 +286,8 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · **🚪 GATE** = milesto
 - [x] Report sent as **structured JSON attachment**, never free plaintext
 - [x] Destination hard-coded: `rmisegal+uoh26finalgame@gmail.com`
 - [x] Send-storm simulation blocked before reaching the API
+- [x] `report --send` command reaching the mail pipeline, dry-run by default
+      (`cli_report.py`, `cli_report_send.py`)
 
 ### JSON artefacts
 - [x] `declaration_<game_id>.json` — teams, members, **4 repo URLs**, MCP addresses,
@@ -212,35 +302,67 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · **🚪 GATE** = milesto
 
 ---
 
+## Repository hygiene gates (CI)
+
+- [x] 150-line file budget enforced unconditionally in CI
+      (`scripts/check_line_limit.py`, no exemption list)
+- [x] Tracked-file secret scan enforced unconditionally in CI
+      (`scripts/secret_scan.py`, filename globs + high-signal content patterns)
+- [x] Shared-module drift check against the sibling repo
+      (`scripts/check_shared_drift.py`)
+- [x] `ruff check`, `ruff format --check`, `mypy --strict`, `pytest` with the
+      coverage floor read from `pyproject.toml`
+
+---
+
 ## League play
 
 - [x] Pre-match negotiation protocol: board, starts, barrier quota, `map_area`,
       timeouts, token ceiling
 - [x] Exchange and verify `config_sha256`; **refuse to play on mismatch**
-- [ ] **Game-count declaration** at the start of every match (a false declaration
-      disqualifies the team)
+- [x] **Game-count declaration** at the start of every match (a false declaration
+      disqualifies the team) — `infra/match_ledger.py`, read by
+      `runtime/driver.py` before the first handshake and recorded afterwards
+- [x] **Result agreed on the wire before either side reports** (Appendix E rule 35)
+      — `runtime/orchestrator_result.py`, `shared/result_claim.py`; silence counts
+      as disagreement
 - [ ] Warm-up matches against varied strategies (not counted — allowed and encouraged)
+      — only a self-warm-up is recorded (`artefacts/declaration_warmup-01.json`)
 - [ ] **Counted match #1** vs team ___ — result agreed, both reports sent
 - [ ] **Counted match #2** vs team ___ — result agreed, both reports sent
 - [ ] (Optional, up to 10 total) further counted matches vs **different** teams
 - [ ] One counted match per opponent — no repeats for points
-- [ ] Mutual log audit completed after every match, before agreeing the result
+- [x] Mutual log audit completed after every match, before agreeing the result
+      (`runtime/match.py` — a series whose audit found forgery is never offered
+      for agreement)
+- [ ] Fill `[teams.them]` in `config/police/game.toml` with the real opponent's
+      group name, members and four repo URLs before a counted match
+- [ ] Record the measured round-trip figures in `docs/LATENCY.md` per opponent
 
 ---
 
 ## Submission
 
-- [ ] `README.md` item 1 — Dec-POMDP model: state space, observations, uncertainty
-- [ ] `README.md` item 2 — FastMCP orchestration dilemmas: turn management,
+- [x] `README.md` item 1 — Dec-POMDP model: state space, observations, uncertainty
+- [x] `README.md` item 2 — FastMCP orchestration dilemmas: turn management,
       network-failure handling, Gatekeeper and Orchestrator roles
-- [ ] `README.md` item 3 — strategies implemented and why
-- [ ] `README.md` item 4 — learning curves (**only if** RL was used)
+- [x] `README.md` item 3 — strategies implemented and why
+- [x] `README.md` item 4 — learning curves (**only if** RL was used)
+      — answered explicitly as *not applicable*; no RL is used
 - [ ] `README.md` item 5 — **screenshots: belief heatmap + Replay `Verified OK`**
-- [ ] `README.md` item 6 — **cross-link to the thief repo**
-- [ ] Any contradiction found in the rulebook documented: where, what we chose, why
+- [x] `README.md` item 6 — **cross-link to the thief repo**
+- [ ] Team member names and student IDs — `README.md` `## Team` still says
+      *Member names to be completed*, and `[game] members` in
+      `config/police/game.toml` still carries the placeholder
+- [x] Any contradiction found in the rulebook documented: where, what we chose, why
+      (`README.md` — six entries)
 - [ ] `config/` files for every match committed
-- [ ] `docs/PLAN.md`, `docs/TODO.md`, `docs/prd/*` present (this set)
+- [x] `docs/PLAN.md`, `docs/TODO.md`, `docs/prd/*` present (this set)
 - [ ] Secrets audit: nothing sensitive anywhere in Git history
+      — `scripts/secret_scan.py` gates every **tracked** file on every push; a
+      sweep of the **history** has not been run
+- [ ] Switch `[email] mode` from `draft` to `send` in `config/police/game.toml`
+      once a dry run has been verified
 - [ ] Annotated tag pushed:
       `git tag -a v1.0-submission -m "Final submission: Police-Thief P2P, group N"`
 - [ ] Moodle: Word template filled **without moving any field**, saved as PDF
@@ -252,11 +374,17 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done · **🚪 GATE** = milesto
 
 ## Final pre-submission checklist (Rulebook §11.5)
 
-- [ ] Base logic works: full race, no crash, scoring enforced
-- [ ] FastMCP over a **public URL**, not just localhost
-- [ ] Commit-Reveal active and the audit completes with no forgery detected
-- [ ] Scent map and belief map computed **and actually influencing decisions**
-- [ ] Live GUI and Replay App with a valid `Verified OK` stamp
+- [x] Base logic works: full race, no crash, scoring enforced
+      (`tests/test_stage1_acceptance.py`, `tests/test_localhost_match.py`)
+- [x] FastMCP over a **public URL**, not just localhost
+      (public ngrok addresses recorded in the warm-up declaration)
+- [x] Commit-Reveal active and the audit completes with no forgery detected
+      (`tests/test_stage6_acceptance.py`, `tests/test_localhost_match.py`)
+- [x] Scent map and belief map computed **and actually influencing decisions**
+      — belief peak is the `target` the brain pursues; the verbal hint is not
+      yet folded into the belief (see the two open Stage-4 boxes)
+- [x] Live GUI and Replay App with a valid `Verified OK` stamp
 - [ ] Gmail JSON reports sent **by both sides**
-- [ ] GitHub repo with Git tag and academic README
+- [ ] GitHub repo with Git tag and academic README — the README is in place, the
+      `v1.0-submission` tag does not exist yet
 - [ ] **At least 2 matches against different teams**
