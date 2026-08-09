@@ -238,6 +238,9 @@ rulebook's worked example (PDF p. 47) is this agent's daily bread: the thief
 announces "I moved north", the trail that should read ≈ 0.81 there reads
 0.00, and `domain/credibility.py` concludes the claim is a lie, lowers the
 trust assigned to the verbal channel, and re-aims pursuit at the real source.
+The two witnesses meet in `runtime/subgame_hint.py`, which scores the sentence
+against the trail *before* it reaches the belief, so a contradicted claim
+arrives already discounted rather than believed and regretted.
 
 **The belief state is the posterior the formalism calls for.**
 `domain/belief.py` maintains a normalised distribution over cells: uniform
