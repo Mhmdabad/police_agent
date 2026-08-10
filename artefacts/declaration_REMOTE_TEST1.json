@@ -1,0 +1,20 @@
+{
+  "mcp_addresses": {
+    "police": {
+      "group_id": "s82kma9e",
+      "protocol_version": "1.0",
+      "public_url": "https://143b-5-29-13-9.ngrok-free.app/mcp",
+      "reachable": true,
+      "role": "police",
+      "since_sub_game": 3
+    },
+    "thief": {
+      "group_id": "s82kma9e",
+      "protocol_version": "1.0",
+      "public_url": "https://crisping-superjet-country.ngrok-free.dev/mcp",
+      "reachable": true,
+      "role": "thief",
+      "since_sub_game": 3
+    }
+  }
+}
