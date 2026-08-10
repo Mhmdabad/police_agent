@@ -7,7 +7,8 @@ and a mismatch fails at first contact rather than in development.
 
 import pytest
 
-from cop_agent.infra.inboxes import ACK, TOOL_NAMES, PeerInboxes, register
+from cop_agent.infra.inboxes import ACK, TOOL_NAMES, register
+from cop_agent.infra.inboxes import PeerInboxes as _PeerInboxes
 from cop_agent.infra.protocol import (
     CONTROL_KINDS,
     ROLES,
@@ -27,6 +28,12 @@ TURN = {
     "game_uid": "series-123",
     "sub_game": 2,
 }
+
+
+def PeerInboxes(**kwargs: object) -> _PeerInboxes:  # noqa: N802 - mirrors the production type
+    kwargs.setdefault("game_uid", "series-123")
+    kwargs.setdefault("sub_game", 2)
+    return _PeerInboxes(**kwargs)  # type: ignore[arg-type]
 
 
 class TestWireVocabulary:
@@ -119,12 +126,36 @@ class TestAuditPayload:
         with pytest.raises(InvalidPayloadError):
             AuditPayload.from_dict({"sender": "thief", "records": []})
 
-    def test_series_and_sub_game_binding_are_required(self) -> None:
-        base = {"sender": "thief", "records": [], "result_claim": "survival"}
-        with pytest.raises(InvalidPayloadError, match="game_uid"):
-            AuditPayload.from_dict(base)
-        with pytest.raises(InvalidPayloadError, match="sub_game"):
-            AuditPayload.from_dict({**base, "game_uid": "series-123"})
+    def test_an_absent_binding_is_accepted_because_the_cohort_sends_none(self) -> None:
+        """The reference protocol has no ``game_uid``; ours is an addition.
+
+        Requiring it refused every audit a peer running the cohort's code
+        sent — and a refused audit is an unopenable commitment, which rule 19
+        reads as forgery rather than as a version skew.
+        """
+        parsed = AuditPayload.from_dict(
+            {"sender": "thief", "records": [], "result_claim": "survival"}
+        )
+        assert parsed.game_uid == ""
+        assert parsed.sub_game == 0
+
+    def test_our_own_fields_are_dropped_from_the_wire_when_unset(self) -> None:
+        """The reference parses with ``cls(**data)`` and raises on any extra."""
+        body = AuditPayload(sender="thief", records=[], result_claim="survival").to_dict()
+        assert "game_uid" not in body
+        assert "sub_game" not in body
+
+    def test_a_binding_that_is_present_still_round_trips(self) -> None:
+        parsed = AuditPayload.from_dict(
+            {
+                "sender": "thief",
+                "records": [],
+                "result_claim": "survival",
+                "game_uid": "series-123",
+                "sub_game": 2,
+            }
+        )
+        assert (parsed.game_uid, parsed.sub_game) == ("series-123", 2)
 
 
 class TestControlMessage:
@@ -155,25 +186,25 @@ class RecordingHost:
 
 class TestInboxes:
     def test_a_valid_turn_is_queued_and_acked(self) -> None:
-        boxes = PeerInboxes(game_uid="series-123", sub_game=2)
+        boxes = PeerInboxes()
         assert boxes.receive_turn(TURN) == ACK
         assert boxes.turns.get_nowait().step == 3
 
     def test_a_malformed_turn_is_refused_not_queued(self) -> None:
         """A bad message must not reach a consumer that meets it mid-turn."""
-        boxes = PeerInboxes(game_uid="series-123", sub_game=2)
+        boxes = PeerInboxes()
         result = boxes.receive_turn({"sender": "police"})
         assert result["ok"] is False
         assert boxes.turns.empty()
 
     def test_a_refusal_is_recorded_for_the_dispute(self) -> None:
-        boxes = PeerInboxes(game_uid="series-123", sub_game=2)
+        boxes = PeerInboxes()
         boxes.receive_turn(None)
         assert boxes.rejected and "receive_turn" in boxes.rejected[0]
 
     def test_nothing_raises_across_the_wire(self) -> None:
         """A crash mid-turn would void a match we might be winning."""
-        boxes = PeerInboxes(game_uid="series-123", sub_game=2)
+        boxes = PeerInboxes()
         hostiles: tuple[object, ...] = (None, [], "x", 1, {"sender": "referee"})
         for hostile in hostiles:
             assert boxes.negotiate(hostile)["ok"] in (True, False)
@@ -201,7 +232,7 @@ class TestInboxes:
 
     def test_accepting_a_message_does_not_block_on_our_runtime(self) -> None:
         """Fire-and-forget: a busy peer never times out its opponent's send."""
-        boxes = PeerInboxes(game_uid="series-123", sub_game=2)
+        boxes = PeerInboxes()
         for step in range(100):
             assert boxes.receive_turn({**TURN, "step": step}) == ACK
         assert boxes.turns.qsize() == 100
@@ -228,7 +259,7 @@ class TestARetriedTurnIsNotASecondTurn:
     """
 
     def test_the_first_copy_is_taken(self) -> None:
-        inboxes = PeerInboxes(game_uid="series-123", sub_game=2)
+        inboxes = PeerInboxes()
         assert inboxes.receive_turn(TURN) == ACK
         assert inboxes.turns.qsize() == 1
 
@@ -238,7 +269,7 @@ class TestARetriedTurnIsNotASecondTurn:
         Refusing would only make the sender retry again, spending its budget
         on a message we already have.
         """
-        inboxes = PeerInboxes(game_uid="series-123", sub_game=2)
+        inboxes = PeerInboxes()
         inboxes.receive_turn(TURN)
         assert inboxes.receive_turn(dict(TURN)) == ACK
         assert inboxes.turns.qsize() == 1
@@ -246,7 +277,7 @@ class TestARetriedTurnIsNotASecondTurn:
 
     def test_key_order_does_not_make_a_re_send_look_new(self) -> None:
         """JSON does not preserve dictionary order across a round trip."""
-        inboxes = PeerInboxes(game_uid="series-123", sub_game=2)
+        inboxes = PeerInboxes()
         inboxes.receive_turn(TURN)
         inboxes.receive_turn(dict(reversed(list(TURN.items()))))
         assert inboxes.turns.qsize() == 1
@@ -257,7 +288,7 @@ class TestARetriedTurnIsNotASecondTurn:
         This is the exact fraud Commit-Reveal exists to expose, and it arrives
         looking like an ordinary re-send.
         """
-        inboxes = PeerInboxes(game_uid="series-123", sub_game=2)
+        inboxes = PeerInboxes()
         inboxes.receive_turn(TURN)
         reply = inboxes.receive_turn({**TURN, "commit": "b" * 64})
         assert reply["ok"] is False
@@ -266,27 +297,27 @@ class TestARetriedTurnIsNotASecondTurn:
 
     def test_the_contradiction_is_recorded_not_only_refused(self) -> None:
         """Silently keeping the first copy would hide evidence the audit needs."""
-        inboxes = PeerInboxes(game_uid="series-123", sub_game=2)
+        inboxes = PeerInboxes()
         inboxes.receive_turn(TURN)
         inboxes.receive_turn({**TURN, "hint": "a different story"})
         assert any("already played step 3" in entry for entry in inboxes.rejected)
 
     def test_a_later_step_is_not_a_duplicate(self) -> None:
-        inboxes = PeerInboxes(game_uid="series-123", sub_game=2)
+        inboxes = PeerInboxes()
         inboxes.receive_turn(TURN)
         inboxes.receive_turn({**TURN, "step": 4})
         assert inboxes.turns.qsize() == 2
 
     def test_each_sender_has_its_own_step_numbering(self) -> None:
         """Both peers number from one; a shared key would collide every turn."""
-        inboxes = PeerInboxes(game_uid="series-123", sub_game=2)
+        inboxes = PeerInboxes()
         inboxes.receive_turn(TURN)
         inboxes.receive_turn({**TURN, "sender": "thief"})
         assert inboxes.turns.qsize() == 2
 
     def test_a_malformed_turn_is_not_remembered(self) -> None:
         """Otherwise a rejected message would block the valid one that follows."""
-        inboxes = PeerInboxes(game_uid="series-123", sub_game=2)
+        inboxes = PeerInboxes()
         inboxes.receive_turn({**TURN, "commit": 42})
         assert inboxes.receive_turn(TURN) == ACK
         assert inboxes.turns.qsize() == 1
@@ -297,7 +328,7 @@ class TestARetriedTurnIsNotASecondTurn:
         Deduplicating ``negotiate`` would break the re-handshake that tunnel
         rotation depends on.
         """
-        inboxes = PeerInboxes(game_uid="series-123", sub_game=2)
+        inboxes = PeerInboxes()
         inboxes.negotiate({"greeting": {"public_url": "https://a"}})
         inboxes.negotiate({"greeting": {"public_url": "https://a"}})
         assert inboxes.agreements.qsize() == 2
@@ -318,7 +349,7 @@ class TestNegotiateCarriesTwoKindsOfMessage:
     def greeting(self) -> dict[str, object]:
         return {
             "greeting": {
-                "role": "thief",
+                "role": "police",
                 "group_id": "them",
                 "public_url": "https://x/mcp",
                 "protocol_version": "1.0",
