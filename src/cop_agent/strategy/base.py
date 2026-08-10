@@ -15,8 +15,7 @@ model writes text; the algorithm owns every spatial decision. ``_hint`` runs
 rather than making one.
 
 Two overrides exist because the cop has two kinds of turn: ``_pick_move``
-chooses a relocation, and ``_decide_move`` chooses between relocating and
-forfeiting movement to place a barrier. A thief brain needs only the first.
+relocates; ``_decide_move`` weighs relocating against placing a barrier.
 """
 
 import random
@@ -100,11 +99,7 @@ class BrainBase(ABC):
         return self.voice.about(state, self.role, apply_action(state, self.role, action, self.axes))
 
     def _decide_move(self, state: BoardState, **context: object) -> Action:
-        """Choose between relocating and any role-specific alternative.
-
-        The default is to relocate. The cop overrides this to weigh a barrier
-        placement against a move; the thief has no alternative and inherits it.
-        """
+        """Relocate by default; the cop overrides to weigh a barrier instead."""
         return MoveAction(self._pick_move(state, **context))
 
     @abstractmethod
@@ -135,6 +130,11 @@ class BrainBase(ABC):
             NoLegalActionError: if the action is not legal in this state.
         """
         if isinstance(action, PlaceBarrier):
+            if self.role != "cop":
+                raise NoLegalActionError(
+                    f"thief cannot place a barrier at {action.at}; only the cop may "
+                    "place barriers"
+                )
             try:
                 place_barrier(state, action.at, self.axes, self.max_barriers)
             except IllegalActionError as exc:

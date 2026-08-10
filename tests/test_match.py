@@ -36,7 +36,7 @@ from cop_agent.runtime.orchestrator import PROTOCOL_VERSION, MatchAborted, Orche
 from cop_agent.runtime.subgame import Played, SubGame
 from cop_agent.shared.config import config_sha256
 from cop_agent.shared.result_claim import result_claim
-from cop_agent.strategy.police_brain import PoliceBrain
+from cop_agent.strategy.thief_brain import ThiefBrain
 from test_localhost_match import REPOS, build_declaration, parameters  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -68,7 +68,7 @@ class Watching:
         return {"ok": True}
 
 
-def a_peering(role: str = "police", sub_game: int = 1) -> Peering:
+def a_peering(role: str = "thief", sub_game: int = 1) -> Peering:
     """The addresses an opening handshake agreed, for a test not about addresses.
 
     A series re-handshakes between its sub-games and refuses to open without a
@@ -124,11 +124,11 @@ def a_runner(
                 transport=transport,
                 settings=ClientSettings(opponent_url="http://127.0.0.1:1/mcp"),
             ),
-            role="police",
+            role="thief",
         ),
-        declaration=build_declaration("police", "uoh26-s82kma9e", "u-0001"),
+        declaration=build_declaration("thief", "uoh26-s82kma9e", "u-0001"),
         parameters=parameters(),
-        brain=PoliceBrain(),
+        brains={"thief": ThiefBrain(), "police": ThiefBrain()},
         axes=AXES,
         start=BoardState(grid_size=8, cop=(0, 0), thief=(6, 5), barriers=frozenset(), step=0),
         max_steps=2,
@@ -142,7 +142,7 @@ def an_outcome(number: int, clean: bool = True, captured: bool = False) -> SubGa
     log = MatchLog(
         game_id="uoh26-s82kma9e",
         sub_game=number,
-        role="police",
+        role="thief",
         game_uid="u-0001",
         config_sha256="c" * 64,
     )
@@ -336,7 +336,7 @@ class TestOpeningASubGameDoesNotForgetWhatTheOpponentAlreadySent:
     def early() -> dict[str, Any]:
         return {
             "step": 1,
-            "sender": "thief",
+            "sender": "police",
             "hint": "",
             "smell_grid": {},
             "commit": "a" * 64,
@@ -358,7 +358,7 @@ class TestOpeningASubGameDoesNotForgetWhatTheOpponentAlreadySent:
         runner.play_sub_game(2)
 
         assert inboxes.receive_turn(self.early()) == {"ok": True}
-        assert ("thief", 1, "u-0001", 2) in inboxes.accepted_turns
+        assert ("police", 1, "u-0001", 2) in inboxes.accepted_turns
         assert inboxes.rejected == []
 
     def test_the_binding_it_advances_is_this_sub_games(
@@ -499,7 +499,7 @@ def result_for_two() -> Report:
     return Report(
         game_id="uoh26-s82kma9e",
         game_uid="u-0001",
-        role="police",
+        role="thief",
         team="uoh26-cops",
         opponent_team="uoh26-others",
         repositories=REPOS,
@@ -666,7 +666,7 @@ class TestWhoeverStartsFirstMustNotBePunished:
     @staticmethod
     def greeting() -> Greeting:
         return Greeting(
-            role="police",
+            role="thief",
             group_id="s82kma9e",
             public_url="https://ours.ngrok.io/mcp",
             protocol_version=PROTOCOL_VERSION,

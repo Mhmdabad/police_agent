@@ -57,10 +57,10 @@ OTHER_UID = "u-0002"
 
 GAME_ID = "uoh26-s82kma9e"
 
-OUR_ROLE = "police"
+OUR_ROLE = "thief"
 """The role this repository plays. The sibling names the other one."""
 
-THEIR_ROLE = "thief"
+THEIR_ROLE = "police"
 PATIENCE = 20.0
 """Long enough for two local sockets, short enough that a hang is a failure."""
 
@@ -210,7 +210,7 @@ def a_runner(side: Side, config: dict[str, Any], directory: Path) -> MatchRunner
         orchestrator=side.orchestrator,
         declaration=build_declaration(side.role, GAME_ID, GAME_UID),
         parameters=config,
-        brain=PlaysItsOwnPiece("cop" if side.role == "police" else "thief"),  # type: ignore[arg-type]
+        brains={"police": PlaysItsOwnPiece("cop"), "thief": PlaysItsOwnPiece("thief")},  # type: ignore[dict-item]
         axes=AxisConvention(),
         start=BoardState(grid_size=8, cop=(0, 0), thief=(6, 5), barriers=frozenset(), step=0),
         max_steps=3,

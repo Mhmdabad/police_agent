@@ -141,7 +141,7 @@ def wait_for(port: int) -> None:
 class PlaysItsOwnPiece:
     """A brain that picks any legal move for whichever agent it is playing.
 
-    The cop repository ships only a ``PoliceBrain``, which chooses moves for the
+    The cop repository ships only a ``ThiefBrain``, which chooses moves for the
     *cop*. Driving the thief side with it produces moves that are legal for one
     piece and illegal for the other — which is what the first run of this test
     reported. The point here is the wire and the ceremony, not the strategy, so
@@ -220,7 +220,7 @@ def a_side(role: str, port: int, opponent_port: int) -> Side:
         orchestrator=Orchestrator(inboxes=inboxes, client=client, role=role),
         declaration=build_declaration(role, "uoh26-s82kma9e", "u-0001"),
         parameters=parameters(),
-        brain=PlaysItsOwnPiece("cop" if role == "police" else "thief"),  # type: ignore[arg-type]
+        brains={"police": PlaysItsOwnPiece("cop"), "thief": PlaysItsOwnPiece("thief")},  # type: ignore[dict-item]
         axes=AXES,
         start=BoardState(grid_size=8, cop=(0, 0), thief=(6, 5), barriers=frozenset(), step=0),
         max_steps=STEPS,
@@ -236,8 +236,8 @@ def a_side(role: str, port: int, opponent_port: int) -> Side:
 def played(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Side, Side, Path]]:
     """Run one real sub-game between two real servers, once for this module."""
     cop_port, thief_port = free_port(), free_port()
-    cop = a_side("police", cop_port, thief_port)
-    thief = a_side("thief", thief_port, cop_port)
+    cop = a_side("thief", cop_port, thief_port)
+    thief = a_side("police", thief_port, cop_port)
 
     for side in (cop, thief):
         host = build(side.inboxes, name=f"{side.role}-under-test")
@@ -356,7 +356,7 @@ class TestBothLogsVerify:
 
     def test_the_thiefs_log_stamps_verified_ok(self, played: tuple[Side, Side, Path]) -> None:
         _, thief, where = played
-        result = walk(load(played_log(thief).write(where / "thief")))
+        result = walk(load(played_log(thief).write(where / "police")))
         assert result.stamp is Stamp.VERIFIED_OK, str(result)
 
     def test_both_are_fully_re_verifiable(self, played: tuple[Side, Side, Path]) -> None:
@@ -491,7 +491,7 @@ class TestAWholeMatchRunsThroughTheRunner:
             orchestrator=Orchestrator(inboxes=side.inboxes, client=side.client, role=side.role),
             declaration=build_declaration(side.role, "uoh26-s82kma9e", "u-0001"),
             parameters=parameters(),
-            brain=PlaysItsOwnPiece("cop" if side.role == "police" else "thief"),  # type: ignore[arg-type]
+            brains={"police": PlaysItsOwnPiece("cop"), "thief": PlaysItsOwnPiece("thief")},  # type: ignore[dict-item]
             axes=AXES,
             start=BoardState(grid_size=8, cop=(0, 0), thief=(6, 5), barriers=frozenset(), step=0),
             max_steps=STEPS,

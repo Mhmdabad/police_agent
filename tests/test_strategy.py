@@ -1,29 +1,26 @@
-"""Tests for the cop's brain and its selection from config."""
+"""Tests for the thief's brain and its selection from config."""
 
 import random
 import tomllib
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from cop_agent.domain.actions import (
-    IllegalActionError,
-    MoveAction,
-    PlaceBarrier,
-    place_barrier,
-    placement_range,
-)
+from cop_agent.domain.actions import Action, MoveAction, PlaceBarrier
 from cop_agent.domain.axes import AxisConvention
-from cop_agent.domain.board import MOVES, Agent, BoardState, Move
-from cop_agent.domain.outcome import is_capture_by_overlap
+from cop_agent.domain.board import MOVES, BoardState, Move
 from cop_agent.domain.rules import legal_moves, target_of
 from cop_agent.domain.search import reachable_area
-from cop_agent.strategy.barriers import winning_placement
 from cop_agent.strategy.base import BrainBase, Decision, NoLegalActionError
-from cop_agent.strategy.loader import DEFAULT_BRAIN, StrategyError, load_brain
-from cop_agent.strategy.police_brain import PoliceBrain, manhattan
-from cop_agent.strategy.tradeoff import weigh
+from cop_agent.strategy.loader import DEFAULT_BRAINS, StrategyError, load_brain
+from cop_agent.strategy.thief_brain import (
+    MIN_OPEN_NEIGHBOURS,
+    ThiefBrain,
+    manhattan,
+    open_neighbours,
+)
 
 AXES = AxisConvention()
 
@@ -35,8 +32,8 @@ def make(**kw: object) -> BoardState:
 
 
 class TestManhattan:
-    def test_matches_the_rulebook_worked_example(self) -> None:
-        """Cop (2,2), target (5,5): D = 3 + 3 = 6."""
+    def test_matches_the_rulebook_formula(self) -> None:
+        """Distance between two cells, as the rulebook defines it."""
         assert manhattan((2, 2), (5, 5)) == 6
 
     def test_is_symmetric(self) -> None:
@@ -50,268 +47,231 @@ class TestManhattan:
         assert manhattan((0, 0), (0, 2)) == 2
 
 
-class TestPursuit:
-    def test_closes_distance_from_the_corner(self) -> None:
-        brain = PoliceBrain(axes=AXES)
-        state = make()
-        move = brain.decide(state, target=state.thief).action
-        assert isinstance(move, MoveAction)
-        assert move.move in {"S", "E"}
-
-    def test_the_rulebook_worked_example(self) -> None:
-        """Cop (2,2) chasing (5,5): east or south both reduce D to 5."""
-        brain = PoliceBrain(axes=AXES)
-        state = make(cop=(2, 2), thief=(5, 5))
-        action = brain.decide(state, target=state.thief).action
+class TestEvasion:
+    def test_runs_from_the_pursuer(self) -> None:
+        brain = ThiefBrain(axes=AXES)
+        action = brain.decide(make(cop=(0, 0), thief=(3, 3))).action
         assert isinstance(action, MoveAction)
         assert action.move in {"S", "E"}
 
-    def test_never_increases_the_distance_when_it_chooses_to_move(self) -> None:
-        """The pursuit invariant, now scoped to the turns it governs.
+    def test_it_only_gives_up_distance_to_leave_cramped_ground(self) -> None:
+        """The invariant #37 replaced "never decreases the distance" with.
 
-        Since #45 and #46 the cop also has a placement turn, so "the action is
-        a move" is no longer an invariant of the policy. Where a win exists the
-        assertion is stronger — the win is taken — and where the cop moves the
-        old invariant holds unchanged.
+        The old rule held everywhere on an open board except the far corner,
+        where standing still was the furthest cell *and* the cheapest one for
+        the cop to seal. Losing a cell of distance to gain a side of degree is
+        the trade this policy exists to make, so the invariant now permits it
+        exactly when the cell being left is below the threshold.
         """
-        brain = PoliceBrain(axes=AXES)
-        placements = 0
+        brain = ThiefBrain(axes=AXES)
         for row in range(7):
             for col in range(7):
-                state = make(cop=(row, col), thief=(6, 6))
-                if is_capture_by_overlap(state):
-                    continue  # already won; decide() is not defined for a finished position
-                before = manhattan(state.cop, state.thief)
-                action = brain.decide(state, target=state.thief).action
-                win = winning_placement(state, AXES)
-                if win is not None:
-                    assert action == PlaceBarrier(win)
-                    placements += 1
-                    continue
+                state = make(cop=(0, 0), thief=(row, col))
+                before = manhattan(state.thief, state.cop)
+                action = brain.decide(state).action
                 assert isinstance(action, MoveAction)
-                after = manhattan(target_of(state.cop, action.move, AXES), state.thief)
-                assert after <= before
-        assert placements > 0, "the sweep never reached a winning position"
+                after = manhattan(target_of(state.thief, action.move, AXES), state.cop)
+                if after < before:
+                    assert open_neighbours(state, state.thief, AXES) < MIN_OPEN_NEIGHBOURS
+                    moved_to = target_of(state.thief, action.move, AXES)
+                    assert open_neighbours(state, moved_to, AXES) >= MIN_OPEN_NEIGHBOURS
 
-    def test_an_explicit_target_overrides_the_thief_position(self) -> None:
-        """Once a belief map exists it supplies the target instead."""
-        brain = PoliceBrain(axes=AXES)
-        action = brain.decide(make(cop=(3, 3), thief=(0, 0)), target=(6, 3)).action
+    def test_an_explicit_threat_overrides_the_cop_position(self) -> None:
+        """Once a belief map exists it supplies the threat instead."""
+        brain = ThiefBrain(axes=AXES)
+        action = brain.decide(make(cop=(6, 6), thief=(3, 3)), threat=(0, 3)).action
         assert isinstance(action, MoveAction)
         assert action.move == "S"
 
-    def test_a_walled_in_cop_stays(self) -> None:
+    def test_a_walled_in_thief_stays(self) -> None:
         walls = frozenset({(2, 3), (4, 3), (3, 2), (3, 4)})
-        action = PoliceBrain(axes=AXES).decide(make(cop=(3, 3), barriers=walls)).action
+        action = ThiefBrain(axes=AXES).decide(make(thief=(3, 3), barriers=walls)).action
         assert action == MoveAction("STAY")
 
     def test_honours_the_negotiated_convention(self) -> None:
         flipped = AxisConvention(origin_corner="bottom-left")
-        brain = PoliceBrain(axes=flipped)
-        action = brain.decide(make(cop=(3, 3), thief=(0, 3))).action
+        brain = ThiefBrain(axes=flipped)
+        action = brain.decide(make(cop=(0, 3), thief=(3, 3))).action
         assert isinstance(action, MoveAction)
-        assert action.move == "S"
+        assert action.move == "N"
+
+    def test_distance_alone_will_run_into_a_corner(self) -> None:
+        """The flaw the escape-space refinement exists to fix.
+
+        A corner can be far from the cop and still be where enclosure costs
+        two barriers instead of four. Recorded now so the fix has a failing
+        case to point at.
+        """
+        brain = ThiefBrain(axes=AXES)
+        state = make(cop=(6, 6), thief=(1, 1))
+        action = brain.decide(state, threat=state.cop).action
+        assert isinstance(action, MoveAction)
+        moved = target_of(state.thief, action.move, AXES)
+        assert moved in {(0, 1), (1, 0)}
 
 
 class TestLegalityGuard:
     def test_the_policy_never_returns_an_illegal_move(self) -> None:
-        brain = PoliceBrain(axes=AXES)
+        brain = ThiefBrain(axes=AXES)
         walls = frozenset({(1, 1), (2, 2), (3, 3), (4, 4)})
         for row in range(7):
             for col in range(7):
-                state = make(cop=(row, col), thief=(6, 6), barriers=walls)
-                if state.is_barrier(state.cop):
+                state = make(cop=(0, 0), thief=(row, col), barriers=walls)
+                if state.is_barrier(state.thief):
                     continue
                 action = brain.decide(state).action
-                if isinstance(action, PlaceBarrier):
-                    assert action.at in placement_range(state, AXES)
-                    assert not state.is_barrier(action.at)
-                else:
-                    assert action.move in brain.options(state)
+                assert isinstance(action, MoveAction)
+                assert action.move in brain.options(state)
 
     def test_a_rogue_subclass_is_caught(self) -> None:
         """Defence in depth: the guard runs on whatever a subclass produced."""
 
-        class Rogue(PoliceBrain):
+        class Rogue(ThiefBrain):
             def _pick_move(self, state: BoardState, **context: object) -> Move:
                 return "N"
 
         with pytest.raises(NoLegalActionError, match="not among"):
-            state = make(cop=(0, 0))
-            Rogue(axes=AXES).decide(state, target=state.thief)
-
-    def test_the_base_default_relocates(self) -> None:
-        """PoliceBrain overrides _decide_move to weigh barriers, so the base
-        class's own default - relocate, no alternative - is only reachable
-        through a role that has none. It is still the contract a thief brain
-        inherits, so it is exercised here rather than left unrun."""
-
-        class MoveOnly(BrainBase):
-            @property
-            def role(self) -> Agent:
-                return "cop"
-
-            def _pick_move(self, state: BoardState, **context: object) -> Move:
-                return "STAY"
-
-        assert MoveOnly(axes=AXES).decide(make()).action == MoveAction("STAY")
+            Rogue(axes=AXES).decide(make(thief=(0, 0)))
 
     def test_the_guard_cannot_be_bypassed_by_overriding_pick_move(self) -> None:
         """`decide` is the entry point; subclasses override the hooks."""
         assert "_guard" in BrainBase.decide.__code__.co_names
 
     def test_a_sealed_cop_has_nothing_legal(self) -> None:
-        """Sealed in place with every neighbour blocked: no move exists."""
+        """The trapping-capture state: sealed in place, nothing legal."""
         walls = frozenset({(3, 3), (2, 3), (4, 3), (3, 2), (3, 4)})
         with pytest.raises(NoLegalActionError, match="no legal move"):
-            PoliceBrain(axes=AXES).decide(make(cop=(3, 3), barriers=walls))
+            ThiefBrain(axes=AXES).decide(make(thief=(3, 3), barriers=walls))
 
     def test_the_guard_reports_an_empty_option_set(self) -> None:
         """A subclass that acts anyway is caught by the guard, not the policy."""
 
-        class Stubborn(PoliceBrain):
+        class Stubborn(ThiefBrain):
             def _pick_move(self, state: BoardState, **context: object) -> Move:
                 return "N"
 
         walls = frozenset({(3, 3), (2, 3), (4, 3), (3, 2), (3, 4)})
         with pytest.raises(NoLegalActionError, match="has no legal move"):
-            Stubborn(axes=AXES).decide(make(cop=(3, 3), barriers=walls))
+            Stubborn(axes=AXES).decide(make(thief=(3, 3), barriers=walls))
 
-    def test_a_legal_placement_passes(self) -> None:
-        PoliceBrain(axes=AXES)._guard(make(cop=(0, 0)), PlaceBarrier((1, 0)))
+    def test_a_barrier_action_is_refused_outright(self) -> None:
+        """The thief may never place one, in any position, ever.
 
-    def test_a_placement_out_of_reach_is_refused(self) -> None:
-        """This used to pass. The guard checked moves and let every barrier
-        through on the grounds that placement legality belonged to the domain
-        layer — which validates it after it has gone out on the wire, where
-        the thief rejects it and we take a technical loss."""
-        with pytest.raises(NoLegalActionError, match="illegal barrier"):
-            PoliceBrain(axes=AXES)._guard(make(cop=(0, 0)), PlaceBarrier((5, 5)))
+        This used to pass the guard on the grounds that placement legality
+        belongs to the domain layer. It does — and the domain layer would
+        reject it *after* it had gone out on the wire, where the cop rejects
+        it and we take a technical loss worth zero to both sides. There is no
+        board state to validate against here: the action is refused because of
+        who is taking it.
+        """
+        brain = ThiefBrain(axes=AXES)
+        with pytest.raises(NoLegalActionError, match="only the cop may place barriers"):
+            brain._guard(make(), PlaceBarrier((1, 0)))
 
-    def test_a_placement_off_the_board_is_refused(self) -> None:
-        with pytest.raises(NoLegalActionError, match="illegal barrier"):
-            PoliceBrain(axes=AXES)._guard(make(cop=(0, 0)), PlaceBarrier((-1, 0)))
+    def test_a_brain_that_returns_a_barrier_cannot_commit_it(self) -> None:
+        """The guard runs inside decide(), so an override cannot route past it."""
 
-    def test_a_placement_on_an_existing_barrier_is_refused(self) -> None:
-        """Barriers are permanent; sealing one twice spends a barrier on
-        nothing and is not a legal action."""
-        state = make(cop=(0, 0), barriers=frozenset({(1, 0)}))
-        with pytest.raises(NoLegalActionError, match="illegal barrier"):
-            PoliceBrain(axes=AXES)._guard(state, PlaceBarrier((1, 0)))
+        class Greedy(ThiefBrain):
+            def _decide_move(self, state: BoardState, **context: object) -> Action:
+                return PlaceBarrier((1, 0))
 
-    def test_a_placement_beyond_the_quota_is_refused(self) -> None:
-        walls = frozenset({(6, col) for col in range(7)})
-        state = make(cop=(0, 0), barriers=walls)
-        brain = PoliceBrain(axes=AXES, max_barriers=7)
-        with pytest.raises(NoLegalActionError, match="illegal barrier"):
-            brain._guard(state, PlaceBarrier((1, 0)))
+        with pytest.raises(NoLegalActionError, match="only the cop may place barriers"):
+            Greedy(axes=AXES).decide(make())
 
-    def test_the_guard_never_lets_an_illegal_action_through(self) -> None:
-        """#47's acceptance criterion: a property, over random boards, for
-        both kinds of turn."""
-        rng = random.Random(47)
+    def test_the_guard_never_passes_an_illegal_move(self) -> None:
+        """#40's acceptance criterion: a property, over random boards.
+
+        Each brain returns a fixed move regardless of the position, which is
+        the cheapest stand-in for a heuristic, a learned policy or a model
+        suggestion that has lost track of the geometry.
+        """
+        rng = random.Random(40)
         cells = [(row, col) for row in range(7) for col in range(7)]
-        brain = PoliceBrain(axes=AXES)
-        rejected_moves = rejected_placements = 0
-        for _ in range(200):
+        checked = 0
+        for _ in range(300):
             walls = frozenset(rng.sample(cells, rng.randint(0, 20)))
             free = [cell for cell in cells if cell not in walls]
             state = make(cop=rng.choice(free), thief=rng.choice(free), barriers=walls)
-            legal = legal_moves(state, "cop", AXES)
-            reach = placement_range(state, AXES)
-            for move in MOVES:
-                if move in legal:
-                    brain._guard(state, MoveAction(move))
-                else:
-                    rejected_moves += 1
-                    with pytest.raises(NoLegalActionError):
-                        brain._guard(state, MoveAction(move))
-            affordable = state.barriers_used < brain.max_barriers
-            for cell in cells:
-                permitted = affordable and cell in reach and not state.is_barrier(cell)
-                if permitted:
-                    brain._guard(state, PlaceBarrier(cell))
-                else:
-                    rejected_placements += 1
-                    with pytest.raises(NoLegalActionError):
-                        brain._guard(state, PlaceBarrier(cell))
-        assert rejected_moves > 0 and rejected_placements > 0
+            legal = legal_moves(state, "thief", AXES)
+            for forced in MOVES:
 
-    def test_the_guard_agrees_with_the_domain_by_construction(self) -> None:
-        """It attempts the placement rather than restating the rules, so the
-        two cannot drift into disagreeing."""
-        state = make(cop=(3, 3), barriers=frozenset({(3, 4)}))
-        for cell in ((3, 4), (0, 0), (3, 3), (2, 3)):
-            try:
-                place_barrier(state, cell, AXES)
-            except IllegalActionError:
-                with pytest.raises(NoLegalActionError):
-                    PoliceBrain(axes=AXES)._guard(state, PlaceBarrier(cell))
-            else:
-                PoliceBrain(axes=AXES)._guard(state, PlaceBarrier(cell))
+                class Fixed(ThiefBrain):
+                    def _pick_move(self, state: BoardState, **context: object) -> Move:
+                        return forced  # noqa: B023
+
+                brain = Fixed(axes=AXES)
+                if forced in legal:
+                    action = brain.decide(state).action
+                    assert isinstance(action, MoveAction)
+                    assert action.move in legal
+                else:
+                    checked += 1
+                    with pytest.raises(NoLegalActionError):
+                        brain.decide(state)
+        assert checked > 0, "the sweep never produced an illegal candidate to reject"
 
 
 class TestDeterminism:
     def test_same_state_and_seed_yields_the_same_action(self) -> None:
         state = make(cop=(2, 2), thief=(5, 5))
-        first = PoliceBrain(axes=AXES, seed=7).decide(state).action
-        second = PoliceBrain(axes=AXES, seed=7).decide(state).action
+        first = ThiefBrain(axes=AXES, seed=7).decide(state).action
+        second = ThiefBrain(axes=AXES, seed=7).decide(state).action
         assert first == second
 
     def test_the_seed_is_recorded_on_the_brain(self) -> None:
         """A match cannot be replayed if the seed is not known."""
-        assert PoliceBrain(axes=AXES, seed=99).seed == 99
+        assert ThiefBrain(axes=AXES, seed=99).seed == 99
 
     def test_randomness_is_seeded_not_global(self) -> None:
-        a = PoliceBrain(axes=AXES, seed=1).rng.random()
-        b = PoliceBrain(axes=AXES, seed=1).rng.random()
+        a = ThiefBrain(axes=AXES, seed=1).rng.random()
+        b = ThiefBrain(axes=AXES, seed=1).rng.random()
         assert a == b
 
     def test_different_seeds_give_different_streams(self) -> None:
-        a = PoliceBrain(axes=AXES, seed=1).rng.random()
-        b = PoliceBrain(axes=AXES, seed=2).rng.random()
+        a = ThiefBrain(axes=AXES, seed=1).rng.random()
+        b = ThiefBrain(axes=AXES, seed=2).rng.random()
         assert a != b
 
 
 class TestDecision:
     def test_carries_an_action(self) -> None:
-        assert isinstance(PoliceBrain(axes=AXES).decide(make()), Decision)
+        assert isinstance(ThiefBrain(axes=AXES).decide(make()), Decision)
 
     def test_defaults_to_a_truthful_intent(self) -> None:
         """Intent is declared before sending; deception is opt-in."""
-        assert PoliceBrain(axes=AXES).decide(make()).intent == "truth"
+        assert ThiefBrain(axes=AXES).decide(make()).intent == "truth"
 
 
 class TestLoader:
     def test_an_absent_section_loads_the_shipped_brain(self) -> None:
-        assert isinstance(load_brain(None), PoliceBrain)
+        assert isinstance(load_brain(None), ThiefBrain)
 
     def test_an_empty_section_loads_the_shipped_brain(self) -> None:
-        assert isinstance(load_brain({}), PoliceBrain)
+        assert isinstance(load_brain({}), ThiefBrain)
 
     def test_the_default_reference_resolves(self) -> None:
-        assert isinstance(load_brain({"police_class": DEFAULT_BRAIN}), PoliceBrain)
+        assert isinstance(load_brain({"thief_class": DEFAULT_BRAINS["thief"]}), ThiefBrain)
 
     def test_a_custom_brain_is_loaded(self) -> None:
-        spec = "cop_agent.strategy.police_brain:PoliceBrain"
-        assert isinstance(load_brain({"police_class": spec}), BrainBase)
+        spec = "cop_agent.strategy.thief_brain:ThiefBrain"
+        assert isinstance(load_brain({"thief_class": spec}), BrainBase)
 
     def test_a_malformed_reference_is_refused(self) -> None:
         with pytest.raises(StrategyError, match="package.module:Class"):
-            load_brain({"police_class": "not_a_reference"})
+            load_brain({"thief_class": "not_a_reference"})
 
     def test_an_unimportable_module_is_refused(self) -> None:
         with pytest.raises(StrategyError, match="cannot import"):
-            load_brain({"police_class": "no.such.module:Brain"})
+            load_brain({"thief_class": "no.such.module:Brain"})
 
     def test_a_missing_class_is_refused(self) -> None:
         with pytest.raises(StrategyError, match="has no"):
-            load_brain({"police_class": "cop_agent.strategy.police_brain:Missing"})
+            load_brain({"thief_class": "cop_agent.strategy.thief_brain:Missing"})
 
     def test_a_non_brain_is_refused(self) -> None:
         """Loading anything callable would defer the failure to move one."""
         with pytest.raises(StrategyError, match="does not subclass"):
-            load_brain({"police_class": "cop_agent.strategy.police_brain:manhattan"})
+            load_brain({"thief_class": "cop_agent.strategy.thief_brain:manhattan"})
 
     def test_the_axis_convention_is_threaded_through(self) -> None:
         flipped = AxisConvention(origin_corner="bottom-right")
@@ -324,17 +284,17 @@ class TestLoader:
         """The section is commented out, so the heuristic brain runs."""
         path = Path(__file__).parents[1] / "config/police/game.toml"
         private: dict[str, Any] = tomllib.loads(path.read_text())
-        assert isinstance(load_brain(private.get("strategy")), PoliceBrain)
+        assert isinstance(load_brain(private.get("strategy")), ThiefBrain)
 
 
 class TestContract:
-    def test_the_role_is_the_cop(self) -> None:
-        assert PoliceBrain(axes=AXES).role == "cop"
+    def test_the_role_is_the_thief(self) -> None:
+        assert ThiefBrain(axes=AXES).role == "thief"
 
     def test_options_are_in_stable_order(self) -> None:
         """Replay determinism depends on both peers iterating identically."""
-        brain = PoliceBrain(axes=AXES)
-        state = make(cop=(3, 3))
+        brain = ThiefBrain(axes=AXES)
+        state = make(thief=(3, 3))
         assert brain.options(state) == list(MOVES)
 
     def test_the_base_class_cannot_be_instantiated(self) -> None:
@@ -342,84 +302,175 @@ class TestContract:
             BrainBase()  # type: ignore[abstract]
 
 
-class TestContainmentTieBreak:
+class TestEscapeSpaceTieBreak:
     def test_distance_still_dominates(self) -> None:
-        """Containment breaks ties; it does not override closing in."""
-        brain = PoliceBrain(axes=AXES)
-        state = make(cop=(0, 0), thief=(0, 6))
-        action = brain.decide(state, target=state.thief).action
-        assert isinstance(action, MoveAction)
-        assert action.move == "E"
+        """Escape space breaks ties; it does not override running.
 
-    def test_a_tie_is_broken_not_left_to_position(self) -> None:
-        """Cop (2,2) to (5,5): S and E both reach D=5, so something must choose."""
-        brain = PoliceBrain(axes=AXES)
-        state = make(cop=(2, 2), thief=(5, 5))
-        action = brain.decide(state, target=state.thief).action
+        From (0,1) with the cop at (0,0), both S and E reach distance 2 while
+        W closes to 0 and STAY holds at 1. The assertion is that a
+        distance-maximal move is chosen, not which of the two — picking one
+        would be asserting the tie-break, which is a different test.
+        """
+        brain = ThiefBrain(axes=AXES)
+        action = brain.decide(make(cop=(0, 0), thief=(0, 1))).action
         assert isinstance(action, MoveAction)
         assert action.move in {"S", "E"}
 
-    def test_it_prefers_shrinking_the_thiefs_reachable_area(self) -> None:
-        """A step that seals a region beats one that merely closes distance."""
-        walls = frozenset({(0, 2), (1, 2), (3, 2), (4, 2), (5, 2), (6, 2)})
-        state = make(cop=(2, 1), thief=(2, 5), barriers=walls)
-        assert PoliceBrain(axes=AXES)._pick_move(state, target=state.thief) == "E"
+    def test_it_prefers_the_side_with_more_room(self) -> None:
+        """A wall makes one equally distant option a much smaller pocket."""
+        walls = frozenset({(1, 0), (1, 1), (1, 2)})
+        state = make(cop=(6, 6), thief=(1, 3), barriers=walls)
+        action = ThiefBrain(axes=AXES).decide(state).action
+        assert isinstance(action, MoveAction)
+        assert action.move != "W"
 
-    def test_but_a_barrier_on_the_corridor_beats_the_step(self) -> None:
-        """The same position, once #46 lets the two be compared.
+    def test_it_avoids_stepping_into_a_sealed_pocket(self) -> None:
+        """The failure distance alone cannot see: far away and nearly trapped."""
+        walls = frozenset({(0, 2), (1, 2), (2, 2), (2, 0), (2, 1)})
+        state = make(cop=(6, 6), thief=(1, 1), barriers=walls)
+        brain = ThiefBrain(axes=AXES)
+        pocket = reachable_area(state, (0, 0), AXES)
+        assert pocket < 10
+        action = brain.decide(state, threat=state.cop).action
+        assert isinstance(action, MoveAction)
 
-        Column 2 is walled except at (2, 2), and the cop stands at (2, 1) on
-        the far side of that gap. Sealing its own cell cuts the fourteen cells
-        of the left region out of the thief's world — a third of the board —
-        while the best step closes one cell of distance. The cop keeps its
-        route out through (2, 2), so nothing is refused.
+    def test_reachable_area_cannot_separate_candidates_at_all(self) -> None:
+        """Why #38 removed it from the tuple.
+
+        A move changes only the thief's own cell, so every legal destination is
+        one step away and therefore in the thief's own component. Reachable
+        area is a property of that component, so it returns the same number for
+        every candidate — not usually, always. It read as a tie-break and
+        never once broke a tie.
         """
-        walls = frozenset({(0, 2), (1, 2), (3, 2), (4, 2), (5, 2), (6, 2)})
-        state = make(cop=(2, 1), thief=(2, 5), barriers=walls)
-        assert reachable_area(state, (2, 5), AXES) == 43
-        call = weigh(state, AXES, (2, 5), "E")
-        assert call.placement is not None
-        assert call.placement.at == (2, 1)
-        assert (call.placement_value, call.move_gain) == (14, 1)
-        assert call.place
-        assert PoliceBrain(axes=AXES).decide(state, target=state.thief).action == PlaceBarrier(
-            (2, 1)
-        )
-
-    def test_edge_pressure_prefers_a_cornered_target(self) -> None:
-        brain = PoliceBrain(axes=AXES)
-        assert brain._edge_pressure(make(), (0, 0)) == 0
-        assert brain._edge_pressure(make(), (3, 3)) == 3
-        assert brain._edge_pressure(make(), (0, 3)) == 0
-
-    def test_edge_pressure_is_symmetric_across_the_board(self) -> None:
-        brain = PoliceBrain(axes=AXES)
-        assert brain._edge_pressure(make(), (6, 6)) == 0
-        assert brain._edge_pressure(make(), (1, 1)) == 1
+        rng = random.Random(7)
+        cells = [(row, col) for row in range(7) for col in range(7)]
+        for _ in range(400):
+            walls = frozenset(rng.sample(cells, rng.randint(0, 14)))
+            free = [cell for cell in cells if cell not in walls]
+            state = make(cop=rng.choice(free), thief=rng.choice(free), barriers=walls)
+            rooms = {
+                reachable_area(
+                    replace(state, thief=target_of(state.thief, move, AXES)),
+                    target_of(state.thief, move, AXES),
+                    AXES,
+                )
+                for move in ThiefBrain(axes=AXES).options(state)
+            }
+            assert len(rooms) <= 1
 
     def test_the_ranking_is_total(self) -> None:
         """Two candidates never tie completely, so the choice is deterministic."""
-        brain = PoliceBrain(axes=AXES)
+        brain = ThiefBrain(axes=AXES)
         state = make(cop=(3, 3), thief=(3, 3))
-        ranks = [brain._rank(state, move, state.thief) for move in brain.options(state)]
+        ranks = [brain._rank(state, move, state.cop) for move in brain.options(state)]
         assert len(set(ranks)) == len(ranks)
 
     def test_it_stays_deterministic_across_instances(self) -> None:
-        state = make(cop=(2, 2), thief=(5, 5))
-        first = PoliceBrain(axes=AXES).decide(state).action
-        second = PoliceBrain(axes=AXES).decide(state).action
-        assert first == second
+        state = make(cop=(0, 0), thief=(3, 3))
+        assert (
+            ThiefBrain(axes=AXES).decide(state).action == ThiefBrain(axes=AXES).decide(state).action
+        )
 
     def test_it_never_returns_an_illegal_move(self) -> None:
-        brain = PoliceBrain(axes=AXES)
+        brain = ThiefBrain(axes=AXES)
         walls = frozenset({(1, 1), (2, 2), (4, 4)})
         for row in range(7):
             for col in range(7):
-                state = make(cop=(row, col), thief=(6, 0), barriers=walls)
-                if state.is_barrier(state.cop):
+                state = make(cop=(0, 0), thief=(row, col), barriers=walls)
+                if state.is_barrier(state.thief):
                     continue
                 action = brain.decide(state).action
-                if isinstance(action, PlaceBarrier):
-                    assert action.at in placement_range(state, AXES)
-                else:
-                    assert action.move in brain.options(state)
+                assert isinstance(action, MoveAction)
+                assert action.move in brain.options(state)
+
+
+class TestCornerAversion:
+    """#37: refuse low-degree cells that gain nothing, and only those."""
+
+    def test_degree_counts_open_exits(self) -> None:
+        state = make(cop=(0, 0), thief=(3, 3))
+        assert open_neighbours(state, (3, 3), AXES) == 4
+        assert open_neighbours(state, (0, 3), AXES) == 3
+        assert open_neighbours(state, (0, 0), AXES) == 2
+
+    def test_a_barrier_closes_a_side_like_the_edge_does(self) -> None:
+        """Appendix D's pricing is one rule, not three."""
+        state = make(cop=(0, 0), thief=(3, 3), barriers=frozenset({(2, 3)}))
+        assert open_neighbours(state, (3, 3), AXES) == 3
+
+    def test_the_threshold_makes_a_corner_cramped_before_any_barrier(self) -> None:
+        assert open_neighbours(make(), (0, 0), AXES) < MIN_OPEN_NEIGHBOURS
+        assert open_neighbours(make(), (0, 3), AXES) >= MIN_OPEN_NEIGHBOURS
+
+    def test_it_leaves_the_far_corner_rather_than_sit_at_maximum_distance(self) -> None:
+        """The case the old distance-only invariant could not express.
+
+        From (6, 6) with the cop at (0, 0), STAY is the furthest option at 12
+        and also the cheapest cell for the cop to seal — two barriers instead
+        of four. The thief gives up one cell of distance for a side of degree.
+        """
+        brain = ThiefBrain(axes=AXES)
+        state = make(cop=(0, 0), thief=(6, 6))
+        assert brain.is_cramped(state, "STAY", state.cop)
+        action = brain.decide(state).action
+        assert isinstance(action, MoveAction)
+        assert action.move in {"N", "W"}
+
+    def test_a_cramped_cell_that_gains_ground_is_still_taken(self) -> None:
+        """The exemption. A thief that will not corner to escape gets caught
+        in open board instead, which is a worse way to lose."""
+        brain = ThiefBrain(axes=AXES)
+        state = make(cop=(1, 1), thief=(1, 0))
+        assert manhattan((0, 0), state.cop) > manhattan(state.thief, state.cop)
+        assert not brain.is_cramped(state, "N", state.cop)
+
+    def test_equal_distance_prefers_the_roomier_cell(self) -> None:
+        """#37's acceptance criterion, and the hole the exemption left.
+
+        From (1, 0) with the cop at (1, 4), N reaches the corner (0, 0) and S
+        reaches (2, 0). Both gain a cell of distance, so the exemption clears
+        both; both still reach all 49 free cells, so escape space cannot
+        separate them either. Before raw degree entered the ranking this fell
+        through to ``MOVES`` order and chose the corner — corner drift arrived
+        at through the rule written to prevent it.
+        """
+        brain = ThiefBrain(axes=AXES)
+        state = make(cop=(1, 4), thief=(1, 0))
+        assert manhattan((0, 0), state.cop) == manhattan((2, 0), state.cop)
+        assert not brain.is_cramped(state, "N", state.cop)
+        assert open_neighbours(state, (0, 0), AXES) < open_neighbours(state, (2, 0), AXES)
+        action = brain.decide(state, threat=state.cop).action
+        assert isinstance(action, MoveAction)
+        assert action.move == "S"
+
+    def test_the_veto_still_outranks_a_degree_preference(self) -> None:
+        """Both terms are present; the veto is the one above distance."""
+        brain = ThiefBrain(axes=AXES)
+        state = make(cop=(0, 0), thief=(6, 6))
+        stay, north = brain._rank(state, "STAY", state.cop), brain._rank(state, "N", state.cop)
+        assert stay[0] == 0 and north[0] == 1
+        assert stay[1] > north[1]
+        assert north > stay
+
+    def test_degree_outranks_distance_in_the_tuple(self) -> None:
+        brain = ThiefBrain(axes=AXES)
+        state = make(cop=(0, 0), thief=(6, 6))
+        assert brain._rank(state, "N", state.cop) > brain._rank(state, "STAY", state.cop)
+
+    def test_the_threshold_is_configurable(self) -> None:
+        """Set it to zero and the policy reverts to pure distance."""
+        state = make(cop=(0, 0), thief=(6, 6))
+        blind = ThiefBrain(axes=AXES, min_open_neighbours=0)
+        assert not blind.is_cramped(state, "STAY", state.cop)
+        action = blind.decide(state).action
+        assert isinstance(action, MoveAction)
+        assert action.move == "STAY"
+
+    def test_a_walled_in_thief_still_stays_rather_than_erroring(self) -> None:
+        """Every option is cramped, so the penalty cannot break the choice."""
+        walls = frozenset({(2, 3), (4, 3), (3, 4)})
+        state = make(cop=(0, 0), thief=(3, 3), barriers=walls)
+        action = ThiefBrain(axes=AXES).decide(state).action
+        assert isinstance(action, MoveAction)
+        assert action.move == "W"

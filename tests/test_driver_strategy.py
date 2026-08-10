@@ -1,12 +1,12 @@
 """The configured brain must be the brain that actually plays.
 
-Appendix F §5 gives a team one key — ``[strategy] police_class`` — to swap the
+Appendix F §5 gives a team one key — ``[strategy] thief_class`` — to swap the
 decision engine for its own. :func:`~cop_agent.strategy.loader.load_brain`
 honours it, and ``tests/test_strategy.py`` proves that thoroughly. What no test
 covered is the *hand-off*: whether the driver gives the loader the ``[strategy]``
 table or something else.
 
-It gave it the whole private TOML dict, which has no ``police_class`` key at the
+It gave it the whole private TOML dict, which has no ``thief_class`` key at the
 top level, so the loader found nothing and fell back to the shipped heuristic —
 **silently**, because falling back is the documented behaviour of an absent
 section and the loader cannot tell an absent section from a mis-passed one. A
@@ -32,11 +32,11 @@ from cop_agent.infra.inboxes import PeerInboxes
 from cop_agent.runtime import driver
 from cop_agent.runtime.orchestrator import PROTOCOL_VERSION
 from cop_agent.strategy.base import BrainBase
-from cop_agent.strategy.loader import load_brain
-from cop_agent.strategy.police_brain import PoliceBrain
+from cop_agent.strategy.loader import load_brains
+from cop_agent.strategy.thief_brain import ThiefBrain
 
 
-class SpyBrain(PoliceBrain):
+class SpyBrain(ThiefBrain):
     """A team's own brain, in the only shape the config can name: an import path.
 
     Subclassing the shipped policy rather than :class:`BrainBase` directly keeps
@@ -45,12 +45,12 @@ class SpyBrain(PoliceBrain):
     """
 
 
-STRATEGY = {"police_class": f"{__name__}:SpyBrain"}
+STRATEGY = {"thief_class": f"{__name__}:SpyBrain"}
 """What a team would write under ``[strategy]``, pointing at its own class."""
 
 
 def private_config(strategy: dict[str, Any] | None = None) -> dict[str, Any]:
-    """A private config in the shape ``config/police/game.toml`` is read into."""
+    """A private config in the shape ``config/thief/game.toml`` is read into."""
     config: dict[str, Any] = {
         "version": "1.0",
         "game": {
@@ -69,7 +69,7 @@ def private_config(strategy: dict[str, Any] | None = None) -> dict[str, Any]:
                 },
             }
         },
-        "network": {"my_port": 8801, "opponent_url": "http://127.0.0.1:8802/mcp"},
+        "network": {"my_port": 8802, "opponent_url": "http://127.0.0.1:8801/mcp"},
     }
     if strategy is not None:
         config["strategy"] = strategy
@@ -116,6 +116,7 @@ class RecordingRunner:
         RecordingRunner.built.append(self)
 
     opponent_played_fairly = True
+    spent_tokens = 0
 
     def agree(self) -> None:
         return None
@@ -169,10 +170,10 @@ def match(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Match:
             trash_talk: dict[str, Any] | None = None,
         ) -> BrainBase:
             seen.append(strategy)
-            return load_brain(strategy, axes, seed, trash_talk)
+            return load_brains(strategy, axes, seed, trash_talk)
 
         RecordingRunner.built.clear()
-        monkeypatch.setattr(driver, "load_brain", spy)
+        monkeypatch.setattr(driver, "load_brains", spy)
         monkeypatch.setattr(driver, "MatchRunner", RecordingRunner)
         monkeypatch.setattr(driver, "Orchestrator", StubOrchestrator)
         monkeypatch.setattr(driver, "FastMcpTransport", StubTransport)
@@ -199,20 +200,20 @@ def match(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Match:
 
 class TestTheStrategyTableReachesTheLoader:
     def test_the_loader_is_handed_the_strategy_table(self, match: Match) -> None:
-        """Not the whole private dict, which has no ``police_class`` in it."""
+        """Not the whole private dict, which has no ``thief_class`` in it."""
         seen, _ = match(private_config(STRATEGY))
         assert seen == [STRATEGY]
 
     def test_a_configured_brain_is_the_one_that_plays(self, match: Match) -> None:
         """The point of the key: our class, not the shipped heuristic."""
         _, runner = match(private_config(STRATEGY))
-        assert isinstance(runner.kwargs["brain"], SpyBrain)
+        assert isinstance(runner.kwargs["brains"]["thief"], SpyBrain)
 
     def test_an_absent_section_still_runs_the_shipped_brain(self, match: Match) -> None:
         """The documented default has to survive the fix."""
         _, runner = match(private_config())
-        brain = runner.kwargs["brain"]
-        assert isinstance(brain, PoliceBrain) and not isinstance(brain, SpyBrain)
+        brain = runner.kwargs["brains"]["thief"]  # type: ignore[index]
+        assert isinstance(brain, ThiefBrain) and not isinstance(brain, SpyBrain)
 
     def test_an_absent_section_hands_the_loader_nothing(self, match: Match) -> None:
         """``None``, so the loader's own fallback decides — not a stray dict."""

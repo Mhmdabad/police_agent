@@ -60,7 +60,7 @@ from cop_agent.runtime.orchestrator import (
 from cop_agent.runtime.peer import McpPeer
 from cop_agent.shared.appendix_f import book_int
 from cop_agent.shared.config import config_sha256
-from cop_agent.strategy.police_brain import PoliceBrain
+from cop_agent.strategy.thief_brain import ThiefBrain
 from cop_agent.ui.replay import load
 from cop_agent.ui.verdict import Stamp, walk
 from test_localhost_match import (
@@ -72,8 +72,8 @@ from test_localhost_match import (
 )
 from test_match import an_outcome
 
-ROLE = "police"
-OPPONENT = "thief"
+ROLE = "thief"
+OPPONENT = "police"
 GROUP = "s82kma9e"
 GAME_ID = "uoh26-s82kma9e"
 GAME_UID = "u-0001"
@@ -87,9 +87,9 @@ BOOK_RESPONSE_TIMEOUT = book_int("network_and_league", "response_timeout_sec")
 BOUNDARIES = [2, 3, 4, 5, 6]
 """Every sub-game a re-handshake precedes: 1→2 through 5→6, and nothing else."""
 
-OUR_URL = "https://cop-a1b2.ngrok-free.app"
-THEIR_URL = "https://thief-c3d4.ngrok-free.app"
-ROTATED = "https://thief-e5f6.ngrok-free.app"
+OUR_URL = "https://thief-a1b2.ngrok-free.app"
+THEIR_URL = "https://cop-c3d4.ngrok-free.app"
+ROTATED = "https://cop-e5f6.ngrok-free.app"
 PRIVATE = "http://10.0.0.7:8802"
 LOOPBACK = "http://127.0.0.1:8802"
 
@@ -166,7 +166,7 @@ def a_runner(tmp_path: Path, transport: ScriptedPeer, peering: Peering | None) -
         ),
         declaration=build_declaration(ROLE, GAME_ID, GAME_UID),
         parameters=parameters(),
-        brain=PoliceBrain(),
+        brains={"thief": ThiefBrain(), "police": ThiefBrain()},
         axes=AXES,
         start=BoardState(grid_size=8, cop=(0, 0), thief=(6, 5), barriers=frozenset(), step=0),
         max_steps=2,
@@ -553,7 +553,7 @@ class TestABoundaryFailsClosedOnTheAppendixFDeadline:
         [
             {"greeting": {"role": OPPONENT, "group_id": "them", "public_url": ROTATED}},
             {"greeting": {"role": OPPONENT, "group_id": "them"}},
-            {"greeting": "https://thief-e5f6.ngrok-free.app"},
+            {"greeting": "https://cop-e5f6.ngrok-free.app"},
             {"greeting": {"role": OPPONENT, "group_id": "", "public_url": ROTATED}},
             {"greeting": {}},
         ],
@@ -721,7 +721,7 @@ def a_live_side(role: str, port: int, opponent_port: int, where: Path) -> Live:
         orchestrator=Orchestrator(inboxes=inboxes, client=client, role=role),
         declaration=build_declaration(role, GAME_ID, GAME_UID),
         parameters=parameters(),
-        brain=PlaysItsOwnPiece("cop" if role == "police" else "thief"),  # type: ignore[arg-type]
+        brains={"police": PlaysItsOwnPiece("cop"), "thief": PlaysItsOwnPiece("thief")},  # type: ignore[dict-item]
         axes=AXES,
         start=BoardState(grid_size=8, cop=(0, 0), thief=(6, 5), barriers=frozenset(), step=0),
         max_steps=STEPS,
