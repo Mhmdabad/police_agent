@@ -14,11 +14,12 @@ from typing import Any
 
 import pytest
 
+from conftest import TEST_RECIPIENT
 from cop_agent.infra.dos_detector import Detector
 from cop_agent.infra.gatekeeper import Gatekeeper
 from cop_agent.infra.mailer import LECTURER_NOTE, Mailer, SendError, retry_after_of
 from cop_agent.infra.quota import Quota
-from cop_agent.infra.report import LECTURER, Report, Repositories, SubGameResult
+from cop_agent.infra.report import Report, Repositories, SubGameResult
 from cop_agent.infra.token_bucket import Limiter, TokenBucket
 
 REPOS = Repositories(
@@ -128,7 +129,7 @@ class TestAReportGetsSent:
         mailer, api, _ = a_mailer(tmp_path)
         mailer.send_report(a_report(), "cop@example.com")
         mime = message_from_bytes(base64.urlsafe_b64decode(api.calls[0]["raw"]), policy=default)
-        assert mime["To"] == LECTURER
+        assert mime["To"] == TEST_RECIPIENT
 
 
 class TestTheGatesAreInFrontOfIt:
