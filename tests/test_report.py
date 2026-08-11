@@ -9,14 +9,16 @@ from pathlib import Path
 import pytest
 
 import cop_agent
+from conftest import TEST_RECIPIENT
 from cop_agent.infra.report import (
-    LECTURER,
+    RECIPIENT_ENV,
     SCHEMA_VERSION,
     Message,
     Report,
     ReportError,
     Repositories,
     SubGameResult,
+    recipient,
 )
 
 REPOS = Repositories(
@@ -158,9 +160,9 @@ class TestTheAttachmentIsTheReport:
         assert "41233" not in body
         assert "not machine-readable on purpose" in body
 
-    def test_the_destination_is_the_hard_coded_lecturer_address(self) -> None:
+    def test_the_destination_is_whatever_the_environment_supplied(self) -> None:
         mail = Message(report=report(), sender="cop@example.com").build()
-        assert mail["To"] == LECTURER == "rmisegal+uoh26finalgame@gmail.com"
+        assert mail["To"] == TEST_RECIPIENT
 
     def test_the_subject_names_the_game_and_the_role(self) -> None:
         subject = Message(report=report(), sender="cop@example.com").subject()
@@ -178,7 +180,7 @@ class TestTheGmailPayload:
         decoded = message_from_bytes(
             base64.urlsafe_b64decode(message.raw()["raw"]), policy=default_policy
         )
-        assert decoded["To"] == LECTURER
+        assert decoded["To"] == TEST_RECIPIENT
 
     def test_the_attachment_survives_the_encoding(self) -> None:
         """The end-to-end path: report → MIME → base64 → back to a dict."""
@@ -216,11 +218,59 @@ class TestThereIsNoFreeTextPath:
 
         assert CONTENT_TYPE == ("application", "json")
 
-    def test_the_destination_is_not_configurable_from_outside(self) -> None:
-        """A configurable address is one typo from a report that never arrives."""
+    def test_no_address_is_written_into_the_source(self) -> None:
+        """The destination is configuration; a copy in the code is a second truth."""
         source = (Path(cop_agent.__file__).parent / "infra" / "report.py").read_text()
-        assert 'LECTURER = "rmisegal+uoh26finalgame@gmail.com"' in source
-        assert "getenv" not in source and "environ" not in source
+        assert "@gmail.com" not in source
+        assert "@" not in source.replace("@dataclass", "")
+
+
+class TestWhereAReportIsAddressed:
+    """One source, and a refusal when it is silent.
+
+    Rule 35 scores a report that never arrives exactly like one never sent —
+    zero for us and zero for the opponent, who did nothing wrong. That is an
+    argument for *stopping loudly*, not for inventing a destination: a refusal
+    is visible while somebody can still fix it, and a guessed address is
+    visible only in the wrong inbox, or in none.
+    """
+
+    def test_an_address_from_the_environment_is_used(self) -> None:
+        assert recipient({RECIPIENT_ENV: "me@example.com"}) == "me@example.com"
+
+    def test_surrounding_whitespace_is_trimmed(self) -> None:
+        """`KEY= me@example.com ` in a file must not produce an invalid header."""
+        assert recipient({RECIPIENT_ENV: "  me@example.com  "}) == "me@example.com"
+
+    def test_an_unset_variable_is_refused_rather_than_guessed(self) -> None:
+        with pytest.raises(ReportError, match=RECIPIENT_ENV):
+            recipient({})
+
+    def test_an_empty_variable_is_refused(self) -> None:
+        with pytest.raises(ReportError, match=RECIPIENT_ENV):
+            recipient({RECIPIENT_ENV: ""})
+
+    def test_a_blank_variable_is_refused(self) -> None:
+        """A quoted space in a .env file is a mistake, not an address."""
+        with pytest.raises(ReportError, match=RECIPIENT_ENV):
+            recipient({RECIPIENT_ENV: "   "})
+
+    def test_the_refusal_names_the_file_to_fix(self) -> None:
+        """The error is read by somebody who has just lost a match to it."""
+        with pytest.raises(ReportError, match=r"\.env"):
+            recipient({})
+
+    def test_the_built_message_is_addressed_where_the_environment_says(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(RECIPIENT_ENV, "me@example.com")
+        assert Message(report=report(), sender="us@example.com").build()["To"] == "me@example.com"
+
+    def test_a_message_cannot_be_built_without_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Refused at construction, before anything reaches a provider."""
+        monkeypatch.delenv(RECIPIENT_ENV, raising=False)
+        with pytest.raises(ReportError, match=RECIPIENT_ENV):
+            Message(report=report(), sender="us@example.com")
 
 
 class TestTheResultFileOnDisk:
