@@ -49,6 +49,9 @@ htmlcov/
 # must be committed (Appendix F, mandatory rule 4), and match logs are the
 # evidence the Replay App verifies.
 
+# Counted commands promote canonical league files above internal wire staging.
+artefacts/**/.wire/
+
 # Gatekeeper runtime state: the daily quota ledger and the DoS lock. Machine-
 # local counters, not code — and untracked-but-not-ignored files used to be
 # counted as a dirty tree, which is the one thing they must never be.

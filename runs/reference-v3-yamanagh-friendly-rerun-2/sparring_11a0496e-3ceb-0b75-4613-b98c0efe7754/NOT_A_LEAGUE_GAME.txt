@@ -1,0 +1,7 @@
+This directory holds a SPARRING run — a practice game, not a league game.
+
+App. E rule 52 permits uncounted warm-ups explicitly. Nothing is owed for a run like this one:
+no report is due from either side, and the result artifact here deliberately carries no
+consensus signature, so there is nothing in it that could be submitted.
+
+Do not send these files to anyone. Do not let them near a counted series' artifact directory.
